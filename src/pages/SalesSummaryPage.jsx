@@ -701,7 +701,7 @@ export default function SalesSummaryPage({ apiBaseUrl, authToken, authUser }) {
         if (fetchId !== lastFetchId.current) return;
         const message =
           e instanceof Error ? e.message : "Failed to load sales summary.";
-        setError(`${message} (Showing demo data)`);
+        // setError(`${message} (Showing demo data)`);
         setIsDemoData(false);
         // setSales(
         //   generateDemoSales({
