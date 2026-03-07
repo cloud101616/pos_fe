@@ -156,6 +156,9 @@ export default function ItemListPage({
   onAddItem,
   onEditItem,
   searchQuery,
+  readOnly = false,
+  compact = false,
+  storeIdFilter = "",
 }) {
   const [items, setItems] = useState([]);
   const [category, setCategory] = useState("all");
@@ -163,6 +166,30 @@ export default function ItemListPage({
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  const showStore = !compact;
+  const showCost = !compact;
+  const showMargin = !compact;
+  const showActions = !readOnly;
+
+  const assignedStoreId = String(storeIdFilter || "").trim();
+  const assignedStoreName = String(
+    authUser?.storeName ??
+      authUser?.store_name ??
+      authUser?.store?.name ??
+      authUser?.store?.storeName ??
+      authUser?.store?.label ??
+      "",
+  ).trim();
+
+  function isInAssignedStore(item) {
+    if (!assignedStoreId && !assignedStoreName) return true;
+    const itemStoreId = String(item?.storeId ?? "").trim();
+    const itemStoreName = String(item?.storeName ?? "").trim();
+    if (assignedStoreId && itemStoreId && itemStoreId === assignedStoreId) return true;
+    if (assignedStoreName && itemStoreName && itemStoreName === assignedStoreName) return true;
+    return false;
+  }
 
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
@@ -248,6 +275,13 @@ export default function ItemListPage({
     });
   }, [visibleItems, sort.direction, sort.key]);
 
+  useEffect(() => {
+    if (!compact) return;
+    if (sort.key === "store" || sort.key === "cost" || sort.key === "margin") {
+      setSort({ key: "name", direction: "asc" });
+    }
+  }, [compact, sort.key]);
+
   async function reloadItems() {
     if (!apiBaseUrl) return;
     setIsLoading(true);
@@ -257,11 +291,13 @@ export default function ItemListPage({
         page,
         limit,
         search: (searchQuery || "").trim() || undefined,
+        storeId: assignedStoreId || undefined,
       });
       const payload = await apiRequest(`/items${qs}`);
       const paged = parsePagedResponse(payload, { page, limit });
       const apiItems = extractItemsList({ ...payload, data: paged.data });
-      setItems(apiItems.map((item) => toUiItem(item, categoryNameById)).filter(Boolean));
+      const mapped = apiItems.map((item) => toUiItem(item, categoryNameById)).filter(Boolean);
+      setItems(assignedStoreId || assignedStoreName ? mapped.filter(isInAssignedStore) : mapped);
       setTotal(paged.total ?? null);
       setHasNext(Boolean(paged.hasNext));
       setHasPrev(Boolean(paged.hasPrev));
@@ -333,17 +369,28 @@ export default function ItemListPage({
     return sort.direction === "asc" ? "ascending" : "descending";
   }
 
+  const columnCount =
+    4 +
+    (showStore ? 1 : 0) +
+    (showCost ? 1 : 0) +
+    (showMargin ? 1 : 0) +
+    (showActions ? 1 : 0);
+
   return (
     <div className="page">
       <div className="itemListCard">
         <div className="itemListToolbar">
-          <button
-            className="btn btnPrimary itemListAddBtn"
-            type="button"
-            onClick={() => onAddItem?.()}
-          >
-            + Add item
-          </button>
+          {!readOnly ? (
+            <button
+              className="btn btnPrimary itemListAddBtn"
+              type="button"
+              onClick={() => onAddItem?.()}
+              disabled={!onAddItem}
+              title={!onAddItem ? "Not available" : undefined}
+            >
+              + Add item
+            </button>
+          ) : null}
 
           <div className="itemListToolbarSpacer" />
 
@@ -392,15 +439,17 @@ export default function ItemListPage({
                     Category <span className="sortArrow">{sortArrow("category")}</span>
                   </button>
                 </th>
-                <th className="colStore" aria-sort={ariaSort("store")}>
-                  <button
-                    type="button"
-                    className="thSortBtn"
-                    onClick={() => toggleSort("store")}
-                  >
-                    Store <span className="sortArrow">{sortArrow("store")}</span>
-                  </button>
-                </th>
+                {showStore ? (
+                  <th className="colStore" aria-sort={ariaSort("store")}>
+                    <button
+                      type="button"
+                      className="thSortBtn"
+                      onClick={() => toggleSort("store")}
+                    >
+                      Store <span className="sortArrow">{sortArrow("store")}</span>
+                    </button>
+                  </th>
+                ) : null}
                 <th className="colMoney" aria-sort={ariaSort("price")}>
                   <button
                     type="button"
@@ -410,24 +459,28 @@ export default function ItemListPage({
                     Price <span className="sortArrow">{sortArrow("price")}</span>
                   </button>
                 </th>
-                <th className="colMoney" aria-sort={ariaSort("cost")}>
-                  <button
-                    type="button"
-                    className="thSortBtn thSortBtnRight"
-                    onClick={() => toggleSort("cost")}
-                  >
-                    Cost <span className="sortArrow">{sortArrow("cost")}</span>
-                  </button>
-                </th>
-                <th className="colMoney" aria-sort={ariaSort("margin")}>
-                  <button
-                    type="button"
-                    className="thSortBtn thSortBtnRight"
-                    onClick={() => toggleSort("margin")}
-                  >
-                    Margin <span className="sortArrow">{sortArrow("margin")}</span>
-                  </button>
-                </th>
+                {showCost ? (
+                  <th className="colMoney" aria-sort={ariaSort("cost")}>
+                    <button
+                      type="button"
+                      className="thSortBtn thSortBtnRight"
+                      onClick={() => toggleSort("cost")}
+                    >
+                      Cost <span className="sortArrow">{sortArrow("cost")}</span>
+                    </button>
+                  </th>
+                ) : null}
+                {showMargin ? (
+                  <th className="colMoney" aria-sort={ariaSort("margin")}>
+                    <button
+                      type="button"
+                      className="thSortBtn thSortBtnRight"
+                      onClick={() => toggleSort("margin")}
+                    >
+                      Margin <span className="sortArrow">{sortArrow("margin")}</span>
+                    </button>
+                  </th>
+                ) : null}
                 <th className="colStock" aria-sort={ariaSort("inStock")}>
                   <button
                     type="button"
@@ -437,13 +490,13 @@ export default function ItemListPage({
                     In stock <span className="sortArrow">{sortArrow("inStock")}</span>
                   </button>
                 </th>
-                <th className="colActions" aria-label="Actions" />
+                {showActions ? <th className="colActions" aria-label="Actions" /> : null}
               </tr>
             </thead>
             <tbody>
               {sortedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="usersEmpty">
+                  <td colSpan={columnCount} className="usersEmpty">
                     {isLoading ? "Loading…" : "No items found."}
                   </td>
                 </tr>
@@ -454,35 +507,42 @@ export default function ItemListPage({
                     <td className="colCategory">
                       <span className="cellSelect">{item.category || "—"}</span>
                     </td>
-                    <td className="colStore">
+                    {showStore ? (
+                      <td className="colStore">
                       <span className="cellSelect">
                         {item.storeName || item.storeId || "—"}
                       </span>
-                    </td>
+                      </td>
+                    ) : null}
                     <td className="colMoney">{formatMoney(item.price)}</td>
-                    <td className="colMoney">{formatMoney(item.cost)}</td>
-                    <td className="colMoney">{formatMarginPercent(item)}</td>
+                    {showCost ? <td className="colMoney">{formatMoney(item.cost)}</td> : null}
+                    {showMargin ? (
+                      <td className="colMoney">{formatMarginPercent(item)}</td>
+                    ) : null}
                     <td className="colStock">{item.inStock ?? "—"}</td>
-                    <td className="colActions">
-                      <div className="usersActions">
-                        <button
-                          className="btn btnGhost btnSmall"
-                          type="button"
-                          onClick={() => onEditItem?.(item.id)}
-                          disabled={isSaving}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="btn btnGhost btnSmall btnDanger"
-                          type="button"
-                          onClick={() => deleteItem(item)}
-                          disabled={isSaving}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
+                    {showActions ? (
+                      <td className="colActions">
+                        <div className="usersActions">
+                          <button
+                            className="btn btnGhost btnSmall"
+                            type="button"
+                            onClick={() => onEditItem?.(item.id)}
+                            disabled={isSaving || !onEditItem}
+                            title={!onEditItem ? "Not available" : undefined}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="btn btnGhost btnSmall btnDanger"
+                            type="button"
+                            onClick={() => deleteItem(item)}
+                            disabled={isSaving}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    ) : null}
                   </tr>
                 ))
               )}

@@ -133,7 +133,17 @@ function normalizeReceipt(raw) {
   };
 }
 
-export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) {
+export default function ReceiptsReportPage({
+  apiBaseUrl,
+  authToken,
+  authUser,
+  lockedEmployeeId = "",
+  hideEmployeeFilter = false,
+  hideStoreFilter = false,
+  hideSummary = false,
+}) {
+  const lockedEmployeeIdValue = String(lockedEmployeeId || "").trim();
+
   const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
   const canPickStore = authRole === "admin" || authRole === "owner";
   const reportStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
@@ -146,7 +156,7 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
   const [endDate, setEndDate] = useState(() => formatIsoDateInput(new Date()));
 
   const [dayPart, setDayPart] = useState("all");
-  const [employeeId, setEmployeeId] = useState("all");
+  const [employeeId, setEmployeeId] = useState(() => lockedEmployeeIdValue || "all");
   const [q, setQ] = useState("");
 
   const [page, setPage] = useState(1);
@@ -230,6 +240,11 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
   }, [startDate, endDate, employeeId, q, limit]);
 
   useEffect(() => {
+    if (!lockedEmployeeIdValue) return;
+    setEmployeeId(lockedEmployeeIdValue);
+  }, [lockedEmployeeIdValue]);
+
+  useEffect(() => {
     const start = new Date(startDate);
     const end = new Date(endDate);
     const clamped = clampDateRange({ start, end });
@@ -246,9 +261,11 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
         const to = formatIsoDateInput(clamped.end);
         const baseParams = { from, to, storeId: storeId || undefined };
 
+        const employeeIdForQuery = lockedEmployeeIdValue || (employeeId !== "all" ? employeeId : "");
+
         const receiptsQs = buildQueryString({
           ...baseParams,
-          ...(employeeId !== "all" ? { employeeId } : null),
+          ...(employeeIdForQuery ? { employeeId: employeeIdForQuery } : null),
           ...(q.trim() ? { q: q.trim() } : null),
           page,
           limit,
@@ -258,7 +275,9 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
 
         const [payload, employeePayload] = await Promise.all([
           apiRequest(`/sales/reports/receipts${receiptsQs}`),
-          apiRequest(`/sales/reports/by-employee${employeesQs}`).catch(() => null),
+          lockedEmployeeIdValue
+            ? Promise.resolve(null)
+            : apiRequest(`/sales/reports/by-employee${employeesQs}`).catch(() => null),
         ]);
 
         const parsed = parsePagedResponse(payload, { page, limit });
@@ -298,7 +317,7 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
         if (fetchId !== lastFetchId.current) return;
         setRows(list);
         setSummary(nextSummary);
-        setEmployees(employeesFromReport);
+        setEmployees(lockedEmployeeIdValue ? [] : employeesFromReport);
         setTotal(parsed.total ?? null);
         setHasNext(Boolean(parsed.hasNext));
         setHasPrev(Boolean(parsed.hasPrev));
@@ -307,7 +326,7 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
         const message = e instanceof Error ? e.message : "Failed to load receipts.";
         setError(`${message} (Showing demo data)`);
         setIsDemoData(true);
-        setEmployees([{ id: "demo", label: "Owner" }]);
+        setEmployees(lockedEmployeeIdValue ? [] : [{ id: "demo", label: "Owner" }]);
         setSummary({ allReceipts: 10, sales: 10, refunds: 0 });
         setRows([
           normalizeReceipt({
@@ -328,7 +347,7 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiRequest, employeeId, endDate, limit, page, q, startDate, storeId]);
+  }, [apiRequest, employeeId, endDate, limit, lockedEmployeeIdValue, page, q, startDate, storeId]);
 
   const exportCsv = useCallback(() => {
     const header = ["Receipt no.", "Date", "Employee", "Customer", "Type", "Total"];
@@ -360,7 +379,7 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
       </div>
 
       <div className="card salesSummaryFiltersCard">
-        <div className="salesSummaryFilters">
+      <div className="salesSummaryFilters">
           <div className="salesSummaryFilterGroup" aria-label="Date range">
             <button
               className="salesSummaryRangeBtn"
@@ -456,7 +475,8 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
             </select>
           </div>
 
-          <div className="salesSummaryFilterGroup">
+          {!hideEmployeeFilter && !lockedEmployeeIdValue ? (
+            <div className="salesSummaryFilterGroup">
             <select
               className="select"
               value={employeeId}
@@ -471,9 +491,11 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
                 </option>
               ))}
             </select>
-          </div>
+            </div>
+          ) : null}
 
-          <div className="salesSummaryFilterGroup">
+          {!hideStoreFilter ? (
+            <div className="salesSummaryFilterGroup">
             <select
               className="select"
               value={storeId}
@@ -494,7 +516,8 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
                 </option>
               ))}
             </select>
-          </div>
+            </div>
+          ) : null}
 
           <div className="salesSummaryFiltersRight">
             <div className="salesByItemRangeMeta" title={rangeLabel}>
@@ -511,22 +534,24 @@ export default function ReceiptsReportPage({ apiBaseUrl, authToken, authUser }) 
 
       <div className="receiptsReportContent">
         <div className="receiptsReportMain">
-          <div className="card receiptsReportStats">
-            <div className="receiptsStat">
-              <div className="receiptsStatLabel">All receipts</div>
-              <div className="receiptsStatValue">{summary.allReceipts || 0}</div>
+          {!hideSummary ? (
+            <div className="card receiptsReportStats">
+              <div className="receiptsStat">
+                <div className="receiptsStatLabel">All receipts</div>
+                <div className="receiptsStatValue">{summary.allReceipts || 0}</div>
+              </div>
+              <div className="receiptsStatDivider" aria-hidden="true" />
+              <div className="receiptsStat">
+                <div className="receiptsStatLabel">Sales</div>
+                <div className="receiptsStatValue">{summary.sales || 0}</div>
+              </div>
+              <div className="receiptsStatDivider" aria-hidden="true" />
+              <div className="receiptsStat">
+                <div className="receiptsStatLabel">Refunds</div>
+                <div className="receiptsStatValue">{summary.refunds || 0}</div>
+              </div>
             </div>
-            <div className="receiptsStatDivider" aria-hidden="true" />
-            <div className="receiptsStat">
-              <div className="receiptsStatLabel">Sales</div>
-              <div className="receiptsStatValue">{summary.sales || 0}</div>
-            </div>
-            <div className="receiptsStatDivider" aria-hidden="true" />
-            <div className="receiptsStat">
-              <div className="receiptsStatLabel">Refunds</div>
-              <div className="receiptsStatValue">{summary.refunds || 0}</div>
-            </div>
-          </div>
+          ) : null}
 
           <div className="card salesSummaryTableCard">
             <div className="salesSummaryTableHeader">

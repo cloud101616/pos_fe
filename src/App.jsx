@@ -157,6 +157,12 @@ function App() {
   const authRole = getAuthUserRole(authUser);
   const isCashier = authRole === "cashier";
 
+  function getDefaultPageForRole(role) {
+    if (role === "cashier") return "pos";
+    if (role === "admin") return "reports.salesSummary";
+    return "items.itemList";
+  }
+
   const [toasts, setToasts] = useState([]);
   const toastTimersRef = useRef(new Map());
 
@@ -186,16 +192,29 @@ function App() {
     };
   }, []);
 
-  const lowStockToastLockRef = useRef(false);
+  const lowStockToastInFlightRef = useRef(false);
+  const lowStockToastCheckedKeyRef = useRef("");
+
+  useEffect(() => {
+    if (isAuthed) return;
+    lowStockToastInFlightRef.current = false;
+    lowStockToastCheckedKeyRef.current = "";
+  }, [isAuthed]);
+
   async function checkLowStockAndToast({ user, token }) {
     if (!token) return;
-    if (lowStockToastLockRef.current) return;
-    lowStockToastLockRef.current = true;
+    if (lowStockToastInFlightRef.current) return;
+
+    const userId =
+      user?.id ?? user?._id ?? user?.userId ?? user?.uuid ?? user?.email ?? "";
+    const storeId = resolveStoreId(user);
+    const checkedKey = `${String(userId)}|${String(storeId)}|${String(token)}`;
+    if (lowStockToastCheckedKeyRef.current === checkedKey) return;
 
     try {
+      lowStockToastInFlightRef.current = true;
       const qs = new URLSearchParams();
       qs.set("limit", "200");
-      const storeId = resolveStoreId(user);
       if (storeId) qs.set("storeId", storeId);
 
       const response = await fetch(`${apiBaseUrl}/items?${qs.toString()}`, {
@@ -210,6 +229,7 @@ function App() {
 
       const payload = await readJsonSafely(response);
       if (!response.ok) return;
+      lowStockToastCheckedKeyRef.current = checkedKey;
       const items = extractItemsList(payload)
         .map(toUiItemStock)
         .filter(Boolean);
@@ -233,7 +253,7 @@ function App() {
         ttlMs: 60000,
       });
     } finally {
-      // allow on next login (page reload), but not repeatedly in-session
+      lowStockToastInFlightRef.current = false;
     }
   }
 
@@ -292,8 +312,7 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => isCashier);
   const [activePage, setActivePage] = useState(() => {
     if (!isAuthed) return "login";
-    if (authRole === "cashier") return "pos";
-    return "items.itemList";
+    return getDefaultPageForRole(authRole);
   });
 
   useEffect(() => {
@@ -305,6 +324,23 @@ function App() {
       return;
     setActivePage(isCashier ? "pos" : "items.itemList");
   }, [activePage, isCashier]);
+
+  useEffect(() => {
+    if (!isAuthed || !isCashier) return;
+    if (activePage === "pos" || activePage === "customers" || activePage === "logout")
+      return;
+    if (activePage === "cashier.mySales") return;
+    if (activePage === "items.itemList") return;
+
+    if (String(activePage || "").startsWith("items.")) {
+      setEditingItemId(null);
+      setActivePage("items.itemList");
+      return;
+    }
+
+    setEditingItemId(null);
+    setActivePage("pos");
+  }, [activePage, isAuthed, isCashier]);
   const [editingItemId, setEditingItemId] = useState(null);
   const [expandedSections, setExpandedSections] = useState({
     reports: true,
@@ -314,11 +350,13 @@ function App() {
 
   const sidebarItems = isCashier
     ? [
-         { type: "link", id: "pos", label: "Sales", Icon: PosIcon },
-         { type: "link", id: "customers", label: "Customers", Icon: UsersIcon },
-         { type: "link", id: "settings", label: "Settings", Icon: SettingsIcon, hidden: true },
-         { type: "link", id: "logout", label: "Logout", Icon: SettingsIcon },
-       ]
+        { type: "link", id: "pos", label: "Sales", Icon: PosIcon },
+        { type: "link", id: "cashier.mySales", label: "My sales", Icon: ReportsIcon },
+        { type: "link", id: "items.itemList", label: "Items", Icon: ItemsIcon },
+        { type: "link", id: "customers", label: "Customers", Icon: UsersIcon },
+        { type: "link", id: "settings", label: "Settings", Icon: SettingsIcon, hidden: true },
+        { type: "link", id: "logout", label: "Logout", Icon: SettingsIcon },
+      ]
     : [
         {
           type: "section",
@@ -381,11 +419,13 @@ function App() {
           onLogin={async ({ email, password }) => {
             const result = await loginWithApi({ email, password });
             if (result.ok) {
-              setExpandedSections((s) => ({ ...s, items: true }));
+              setExpandedSections((s) => ({
+                ...s,
+                reports: result.role === "admin",
+                items: result.role !== "cashier" && result.role !== "admin",
+              }));
               if (result.role === "cashier") setIsSidebarCollapsed(true);
-              setActivePage(
-                result.role === "cashier" ? "pos" : "items.itemList",
-              );
+              setActivePage(getDefaultPageForRole(result.role));
               void checkLowStockAndToast({
                 user: result.user,
                 token: result.token,
@@ -416,6 +456,20 @@ function App() {
           apiBaseUrl={apiBaseUrl}
           authToken={authToken}
           authUser={authUser}
+        />
+      );
+    if (activePage === "cashier.mySales")
+      return (
+        <ReceiptsReportPage
+          apiBaseUrl={apiBaseUrl}
+          authToken={authToken}
+          authUser={authUser}
+          lockedEmployeeId={
+            authUser?.id ?? authUser?._id ?? authUser?.userId ?? authUser?.uuid ?? ""
+          }
+          hideEmployeeFilter
+          hideStoreFilter
+          hideSummary
         />
       );
     if (activePage === "settings") return <SettingsPage />;
@@ -453,16 +507,27 @@ function App() {
           apiBaseUrl={apiBaseUrl}
           authToken={authToken}
           authUser={authUser}
-          onAddItem={() => {
-            setEditingItemId(null);
-            setExpandedSections((s) => ({ ...s, items: true }));
-            setActivePage("items.createItem");
-          }}
-          onEditItem={(itemId) => {
-            setEditingItemId(itemId);
-            setExpandedSections((s) => ({ ...s, items: true }));
-            setActivePage("items.createItem");
-          }}
+          readOnly={isCashier}
+          compact={isCashier}
+          storeIdFilter={isCashier ? resolveStoreId(authUser) : ""}
+          onAddItem={
+            isCashier
+              ? undefined
+              : () => {
+                  setEditingItemId(null);
+                  setExpandedSections((s) => ({ ...s, items: true }));
+                  setActivePage("items.createItem");
+                }
+          }
+          onEditItem={
+            isCashier
+              ? undefined
+              : (itemId) => {
+                  setEditingItemId(itemId);
+                  setExpandedSections((s) => ({ ...s, items: true }));
+                  setActivePage("items.createItem");
+                }
+          }
           searchQuery={topbarSearch}
         />
       );
