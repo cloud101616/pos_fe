@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   buildQueryString,
   compareValues,
   getActorHeaders,
+  getAuthUserRole,
   getFetchCredentials,
+  getReportStoreId,
   loadCategoriesFromStorage,
   loadCategoryNamesFromStorage,
   parsePagedResponse,
   toPositiveInt,
 } from "../utils/common.js";
+import { makeStoreOptions, useStoresList } from "../utils/stores.js";
 
 const moneyFormatter = new Intl.NumberFormat("en-PH", {
   style: "currency",
@@ -167,12 +170,17 @@ export default function ItemListPage({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
+  const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
+  const canPickStore = authRole === "admin" || authRole === "owner";
+  const reportStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
+  const forcedStoreId = String(storeIdFilter || "").trim();
+  const [storeId, setStoreId] = useState(() => forcedStoreId || reportStoreId);
+
   const showStore = !compact;
   const showCost = !compact;
   const showMargin = !compact;
   const showActions = !readOnly;
 
-  const assignedStoreId = String(storeIdFilter || "").trim();
   const assignedStoreName = String(
     authUser?.storeName ??
       authUser?.store_name ??
@@ -183,11 +191,25 @@ export default function ItemListPage({
   ).trim();
 
   function isInAssignedStore(item) {
-    if (!assignedStoreId && !assignedStoreName) return true;
+    if (canPickStore && !forcedStoreId) return true;
+
+    const restrictionStoreId = forcedStoreId || reportStoreId;
+    const restrictionStoreName = forcedStoreId
+      ? String(storeNameById?.get?.(forcedStoreId) || "").trim()
+      : assignedStoreName;
+
+    if (!restrictionStoreId && !restrictionStoreName) return true;
     const itemStoreId = String(item?.storeId ?? "").trim();
     const itemStoreName = String(item?.storeName ?? "").trim();
-    if (assignedStoreId && itemStoreId && itemStoreId === assignedStoreId) return true;
-    if (assignedStoreName && itemStoreName && itemStoreName === assignedStoreName) return true;
+
+    if (restrictionStoreId && itemStoreId && itemStoreId === restrictionStoreId) return true;
+    if (
+      restrictionStoreName &&
+      itemStoreName &&
+      itemStoreName.toLowerCase() === restrictionStoreName.toLowerCase()
+    ) {
+      return true;
+    }
     return false;
   }
 
@@ -199,37 +221,82 @@ export default function ItemListPage({
   const totalPages = total ? Math.max(1, Math.ceil(total / limit)) : null;
   const [pageInput, setPageInput] = useState("1");
 
-  function getAuthHeaders() {
+  const getAuthHeaders = useCallback(() => {
     const headers = { "Content-Type": "application/json" };
     if (authToken) headers.Authorization = `Bearer ${authToken}`;
     return { ...headers, ...getActorHeaders(authUser) };
-  }
+  }, [authToken, authUser]);
 
-  async function readJsonSafely(response) {
-    try {
-      return await response.json();
-    } catch {
-      return null;
+  const apiRequest = useCallback(
+    async (path, { method = "GET", body } = {}) => {
+      const response = await fetch(`${apiBaseUrl}${path}`, {
+        method,
+        credentials: getFetchCredentials(),
+        headers: getAuthHeaders(),
+        body: body ? JSON.stringify(body) : undefined,
+      });
+
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      if (!response.ok) {
+        const apiMessage =
+          (payload && (payload.message || payload.error)) ||
+          `Request failed (HTTP ${response.status}).`;
+        throw new Error(String(apiMessage));
+      }
+      return payload;
+    },
+    [apiBaseUrl, getAuthHeaders],
+  );
+
+  const { stores, isStoresLoading } = useStoresList({ apiBaseUrl, apiRequest });
+
+  const storeOptions = useMemo(() => {
+    return makeStoreOptions({ stores, activeStoreId: storeId });
+  }, [storeId, stores]);
+
+  const visibleStoreOptions = useMemo(() => {
+    if (canPickStore && !forcedStoreId) return storeOptions;
+    const active = String(storeId || "").trim();
+    if (!active) return [];
+    return storeOptions.filter((s) => String(s.id) === active);
+  }, [canPickStore, forcedStoreId, storeId, storeOptions]);
+
+  const storeNameById = useMemo(() => {
+    const map = new Map();
+    for (const option of storeOptions) {
+      map.set(String(option.id), String(option.name || option.id));
     }
-  }
+    return map;
+  }, [storeOptions]);
 
-  async function apiRequest(path, { method = "GET", body } = {}) {
-    const response = await fetch(`${apiBaseUrl}${path}`, {
-      method,
-      credentials: getFetchCredentials(),
-      headers: getAuthHeaders(),
-      body: body ? JSON.stringify(body) : undefined,
-    });
+  const activeStoreName = useMemo(() => {
+    const key = String(storeId || "").trim();
+    if (!key) return "";
+    return String(storeNameById.get(key) || "").trim();
+  }, [storeId, storeNameById]);
 
-    const payload = await readJsonSafely(response);
-    if (!response.ok) {
-      const apiMessage =
-        (payload && (payload.message || payload.error)) ||
-        `Request failed (HTTP ${response.status}).`;
-      throw new Error(String(apiMessage));
+  useEffect(() => {
+    if (forcedStoreId) {
+      setStoreId(forcedStoreId);
+      return;
     }
-    return payload;
-  }
+
+    if (!canPickStore) {
+      setStoreId(reportStoreId);
+      return;
+    }
+
+    if (authRole !== "admin" && reportStoreId && !storeId) {
+      setStoreId(reportStoreId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authRole, canPickStore, forcedStoreId, reportStoreId]);
 
   const categories = useMemo(() => {
     const unique = new Set();
@@ -249,6 +316,23 @@ export default function ItemListPage({
 
   const visibleItems = useMemo(() => {
     let list = items;
+
+    if (storeId) {
+      const activeId = String(storeId || "").trim();
+      const activeName = activeStoreName.trim().toLowerCase();
+
+      list = list.filter((item) => {
+        const itemStoreId = String(item?.storeId ?? "").trim();
+        if (itemStoreId && itemStoreId === activeId) return true;
+
+        if (!itemStoreId && activeName) {
+          const itemStoreName = String(item?.storeName ?? "").trim().toLowerCase();
+          return Boolean(itemStoreName) && itemStoreName === activeName;
+        }
+
+        return false;
+      });
+    }
     if (category !== "all") list = list.filter((item) => item.category === category);
 
     const q = (searchQuery || "").trim().toLowerCase();
@@ -260,7 +344,7 @@ export default function ItemListPage({
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [category, items, searchQuery]);
+  }, [activeStoreName, category, items, searchQuery, storeId]);
 
   const sortedItems = useMemo(() => {
     const factor = sort.direction === "asc" ? 1 : -1;
@@ -291,13 +375,13 @@ export default function ItemListPage({
         page,
         limit,
         search: (searchQuery || "").trim() || undefined,
-        storeId: assignedStoreId || undefined,
+        storeId: storeId || undefined,
       });
       const payload = await apiRequest(`/items${qs}`);
       const paged = parsePagedResponse(payload, { page, limit });
       const apiItems = extractItemsList({ ...payload, data: paged.data });
       const mapped = apiItems.map((item) => toUiItem(item, categoryNameById)).filter(Boolean);
-      setItems(assignedStoreId || assignedStoreName ? mapped.filter(isInAssignedStore) : mapped);
+      setItems(forcedStoreId || !canPickStore ? mapped.filter(isInAssignedStore) : mapped);
       setTotal(paged.total ?? null);
       setHasNext(Boolean(paged.hasNext));
       setHasPrev(Boolean(paged.hasPrev));
@@ -321,7 +405,7 @@ export default function ItemListPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBaseUrl, authToken, page, limit, searchQuery]);
+  }, [apiBaseUrl, authToken, page, limit, searchQuery, storeId]);
 
   useEffect(() => {
     if (page !== 1) setPage(1);
@@ -409,6 +493,40 @@ export default function ItemListPage({
               ))}
             </select>
           </label>
+
+          {showStore ? (
+            <label className="field">
+              <div className="fieldLabel">Store</div>
+              <select
+                className="select"
+                value={storeId}
+                onChange={(e) => {
+                  setStoreId(e.target.value);
+                  if (page !== 1) setPage(1);
+                  if (pageInput !== "1") setPageInput("1");
+                  if (error) setError("");
+                }}
+                aria-label="Store filter"
+                disabled={
+                  isLoading ||
+                  isStoresLoading ||
+                  Boolean(forcedStoreId) ||
+                  !canPickStore ||
+                  compact
+                }
+              >
+                {canPickStore && !forcedStoreId ? <option value="">All stores</option> : null}
+                {!canPickStore && !storeId ? (
+                  <option value="">No store assigned</option>
+                ) : null}
+                {visibleStoreOptions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || s.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
 
         {error ? (
