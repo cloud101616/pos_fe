@@ -6,9 +6,11 @@ import {
   getActorHeaders,
   getFetchCredentials,
   makeId,
+  parsePagedResponse,
   readLocalStorage,
   resolveStoreId,
   safeParseList,
+  toPositiveInt,
   writeLocalStorage,
 } from "../utils/common.js";
 import { useStoresList } from "../utils/stores.js";
@@ -252,6 +254,13 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
+  const [itemsPage, setItemsPage] = useState(1);
+  const [itemsLimit, setItemsLimit] = useState(100);
+  const [itemsTotal, setItemsTotal] = useState(null);
+  const [itemsHasNext, setItemsHasNext] = useState(false);
+  const [itemsHasPrev, setItemsHasPrev] = useState(false);
+  const [itemsPageInput, setItemsPageInput] = useState("1");
+
   const [category, setCategory] = useState("all");
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -375,28 +384,68 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
       try {
         const qs = buildQueryString({
           storeId: storeId || undefined,
-          limit: 200,
+          page: itemsPage,
+          limit: itemsLimit,
+          search: search.trim() || undefined,
         });
         let payload;
         try {
           payload = await apiRequest(`/items${qs}`);
         } catch (e) {
           if (storeId) {
-            payload = await apiRequest("/items?limit=200");
+            const fallbackQs = buildQueryString({
+              page: itemsPage,
+              limit: itemsLimit,
+              search: search.trim() || undefined,
+            });
+            payload = await apiRequest(`/items${fallbackQs}`);
           } else {
             throw e;
           }
         }
 
-        const list = extractItemsList(payload).map(toUiItem).filter(Boolean);
+        const parsed = parsePagedResponse(payload, { page: itemsPage, limit: itemsLimit });
+        const data = extractItemsList({ ...payload, data: parsed.data });
+        const list = data.map(toUiItem).filter(Boolean);
         if (cancelled) return;
         setItems(list);
+        setItemsTotal(parsed.total ?? null);
+
+        const hasNextRaw =
+          typeof payload?.hasNext === "boolean"
+            ? payload.hasNext
+            : typeof payload?.has_next === "boolean"
+              ? payload.has_next
+              : null;
+        const inferredHasNext =
+          hasNextRaw != null
+            ? hasNextRaw
+            : parsed.total != null
+              ? itemsPage * itemsLimit < parsed.total
+              : list.length === itemsLimit;
+
+        const hasPrevRaw =
+          typeof payload?.hasPrev === "boolean"
+            ? payload.hasPrev
+            : typeof payload?.has_prev === "boolean"
+              ? payload.has_prev
+              : null;
+        const inferredHasPrev = hasPrevRaw != null ? hasPrevRaw : itemsPage > 1;
+
+        setItemsHasNext(Boolean(inferredHasNext));
+        setItemsHasPrev(Boolean(inferredHasPrev));
+        setItemsPageInput(String(itemsPage));
       } catch (e) {
         if (cancelled) return;
         const list = (Array.isArray(fallbackItems) ? fallbackItems : [])
           .map(toUiItem)
           .filter(Boolean);
         setItems(list);
+        setItemsTotal(list.length);
+        setItemsHasNext(false);
+        setItemsHasPrev(false);
+        setItemsPage(1);
+        setItemsPageInput("1");
         setError(e instanceof Error ? e.message : "Failed to load items.");
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -407,7 +456,13 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
     return () => {
       cancelled = true;
     };
-  }, [apiRequest, storeId]);
+  }, [apiRequest, storeId, itemsLimit, itemsPage, search]);
+
+  useEffect(() => {
+    if (itemsPage !== 1) setItemsPage(1);
+    if (itemsPageInput !== "1") setItemsPageInput("1");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, search, storeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -524,9 +579,14 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
             .toLowerCase()
             .includes(query)
         );
-      })
-      .slice(0, 200);
+      });
   }, [items, category, search, storeId]);
+
+  const itemsTotalPages = useMemo(() => {
+    if (itemsTotal == null) return null;
+    const pages = Math.ceil(itemsTotal / Math.max(1, itemsLimit));
+    return Math.max(1, pages);
+  }, [itemsLimit, itemsTotal]);
 
   const cartSubtotal = useMemo(() => calcCartTotal(cartById), [cartById]);
   const cartCount = useMemo(() => calcCartCount(cartById), [cartById]);
@@ -1069,7 +1129,11 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
         <div className="posItemsHeader">
           <div className="posItemsTitle">Items</div>
           <div className="posItemsSubtitle">
-            {isLoading ? "Loading…" : `${filteredItems.length} shown`}
+            {isLoading
+              ? "Loading…"
+              : `${filteredItems.length} shown${
+                  itemsTotal != null ? ` of ${itemsTotal}` : ""
+                }`}
           </div>
         </div>
 
@@ -1098,6 +1162,72 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
               </button>
             ))
           )}
+        </div>
+
+        <div className="itemListFooter" aria-label="Pagination">
+          <div className="pagerButtons" aria-label="Page controls">
+            <button
+              className="pagerBtn"
+              type="button"
+              aria-label="Previous page"
+              disabled={!itemsHasPrev || itemsPage <= 1 || isLoading}
+              onClick={() => setItemsPage((p) => Math.max(1, p - 1))}
+            >
+              ‹
+            </button>
+            <button
+              className="pagerBtn"
+              type="button"
+              aria-label="Next page"
+              disabled={!itemsHasNext || isLoading}
+              onClick={() => setItemsPage((p) => p + 1)}
+            >
+              ›
+            </button>
+          </div>
+
+          <div className="pagerMeta">
+            <span>Page:</span>
+            <input
+              className="pageInput"
+              type="text"
+              value={itemsPageInput}
+              onChange={(e) => setItemsPageInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                const next = toPositiveInt(itemsPageInput, itemsPage);
+                const clamped = itemsTotalPages ? Math.min(next, itemsTotalPages) : next;
+                setItemsPage(clamped);
+              }}
+              onBlur={() => {
+                const next = toPositiveInt(itemsPageInput, itemsPage);
+                const clamped = itemsTotalPages ? Math.min(next, itemsTotalPages) : next;
+                setItemsPageInput(String(clamped));
+                setItemsPage(clamped);
+              }}
+              aria-label="Page number"
+            />
+            <span>of {itemsTotalPages ?? "—"}</span>
+          </div>
+
+          <div className="pagerMeta">
+            <span>Items per page:</span>
+            <select
+              className="select selectSmall"
+              value={String(itemsLimit)}
+              onChange={(e) => {
+                const nextLimit = toPositiveInt(e.target.value, itemsLimit);
+                setItemsLimit(nextLimit);
+                setItemsPageInput("1");
+                setItemsPage(1);
+              }}
+              aria-label="Items per page"
+            >
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
+          </div>
         </div>
       </div>
 
