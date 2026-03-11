@@ -74,6 +74,27 @@ function extractSalesList(payload) {
   return [];
 }
 
+function getSaleCashierId(raw) {
+  if (!raw || typeof raw !== "object") return "";
+  const id =
+    raw.cashierId ??
+    raw.cashier_id ??
+    raw.employeeId ??
+    raw.employee_id ??
+    raw.userId ??
+    raw.user_id ??
+    raw.createdBy ??
+    raw.created_by ??
+    raw.cashier?.id ??
+    raw.cashier?._id ??
+    raw.employee?.id ??
+    raw.employee?._id ??
+    raw.user?.id ??
+    raw.user?._id ??
+    null;
+  return id == null ? "" : String(id);
+}
+
 function getSaleCreatedAt(raw) {
   if (!raw || typeof raw !== "object") return null;
   const createdAt = raw.createdAt ?? raw.created_at ?? raw.datetime ?? raw.date ?? null;
@@ -166,11 +187,18 @@ function getSaleCostOfGoods(raw, costByItemId) {
   }, 0);
 }
 
-export default function EndOfDayCashPage({ apiBaseUrl, authToken, authUser }) {
+export default function EndOfDayCashPage({
+  apiBaseUrl,
+  authToken,
+  authUser,
+  lockedEmployeeId = "",
+  hideStoreFilter = false,
+}) {
   const todayKey = useMemo(() => formatIsoDateInput(new Date()), []);
   const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
   const canPickStore = authRole === "admin" || authRole === "owner";
   const reportStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
+  const lockedCashierId = useMemo(() => String(lockedEmployeeId || "").trim(), [lockedEmployeeId]);
 
   const [date, setDate] = useState(() => todayKey);
   const [storeId, setStoreId] = useState(() => reportStoreId);
@@ -278,6 +306,8 @@ export default function EndOfDayCashPage({ apiBaseUrl, authToken, authUser }) {
           from: date,
           to: date,
           storeId: storeId || undefined,
+          employeeId: lockedCashierId || undefined,
+          cashierId: lockedCashierId || undefined,
           page: 1,
           limit: 500,
         });
@@ -308,6 +338,9 @@ export default function EndOfDayCashPage({ apiBaseUrl, authToken, authUser }) {
           const dt = getSaleCreatedAt(s);
           if (!dt) return false;
           return dt >= bounds.start && dt < bounds.end;
+        }).filter((s) => {
+          if (!lockedCashierId) return true;
+          return getSaleCashierId(s) === lockedCashierId;
         });
         const totals = filtered.reduce(
           (acc, s) => {
@@ -334,7 +367,7 @@ export default function EndOfDayCashPage({ apiBaseUrl, authToken, authUser }) {
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiBaseUrl, apiRequest, date, fetchAllPages, storeId]);
+  }, [apiBaseUrl, apiRequest, date, fetchAllPages, lockedCashierId, storeId]);
 
   return (
     <div className="page salesSummaryPage">
@@ -359,26 +392,28 @@ export default function EndOfDayCashPage({ apiBaseUrl, authToken, authUser }) {
           </div>
 
           <div className="salesSummaryFilterGroup">
-            <select
-              className="select"
-              value={storeId}
-              onChange={(e) => {
-                setStoreId(e.target.value);
-                if (error) setError("");
-              }}
-              aria-label="Store filter"
-              disabled={isLoading || isStoresLoading || !canPickStore}
-            >
-              {canPickStore ? <option value="">All stores</option> : null}
-              {!canPickStore && !storeId ? (
-                <option value="">No store assigned</option>
-              ) : null}
-              {visibleStoreOptions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name || s.id}
-                </option>
-              ))}
-            </select>
+            {hideStoreFilter ? null : (
+              <select
+                className="select"
+                value={storeId}
+                onChange={(e) => {
+                  setStoreId(e.target.value);
+                  if (error) setError("");
+                }}
+                aria-label="Store filter"
+                disabled={isLoading || isStoresLoading || !canPickStore}
+              >
+                {canPickStore ? <option value="">All stores</option> : null}
+                {!canPickStore && !storeId ? (
+                  <option value="">No store assigned</option>
+                ) : null}
+                {visibleStoreOptions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || s.id}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
       </div>

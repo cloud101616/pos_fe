@@ -82,6 +82,87 @@ function extractList(payload) {
   return [];
 }
 
+function unwrapSalePayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const data = payload.data && typeof payload.data === "object" ? payload.data : null;
+  return (
+    data?.sale ||
+    data?.data ||
+    payload.sale ||
+    payload.receipt ||
+    payload.order ||
+    data ||
+    payload
+  );
+}
+
+function extractSaleItems(sale) {
+  if (!sale || typeof sale !== "object") return [];
+  const candidates = [
+    sale.items,
+    sale.lineItems,
+    sale.line_items,
+    sale.products,
+    sale.productItems,
+    sale.product_items,
+  ];
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+  return [];
+}
+
+function toItemName(raw) {
+  if (!raw || typeof raw !== "object") return "";
+  const direct =
+    raw.name ??
+    raw.itemName ??
+    raw.item_name ??
+    raw.title ??
+    raw.label ??
+    raw.productName ??
+    raw.product_name ??
+    raw.item?.name ??
+    raw.product?.name ??
+    "";
+  const s = String(direct || "").trim();
+  if (s) return s;
+  const id = raw.itemId ?? raw.item_id ?? raw.productId ?? raw.product_id ?? raw.id ?? raw._id ?? null;
+  return id == null ? "" : String(id);
+}
+
+function toItemQty(raw) {
+  if (!raw || typeof raw !== "object") return 0;
+  return toPositiveInt(
+    raw.qty ?? raw.quantity ?? raw.count ?? raw.q ?? raw.amount ?? raw.units ?? 0,
+    0,
+  );
+}
+
+function summarizeSaleItems(payload, { maxItems = 4 } = {}) {
+  const sale = unwrapSalePayload(payload);
+  const items = extractSaleItems(sale);
+  if (!items.length) return { label: "", totalQty: 0 };
+
+  const normalized = items
+    .map((it) => {
+      const name = toItemName(it);
+      const qty = toItemQty(it);
+      if (!name || qty <= 0) return null;
+      return { name, qty };
+    })
+    .filter(Boolean);
+
+  if (!normalized.length) return { label: "", totalQty: 0 };
+
+  const totalQty = normalized.reduce((sum, it) => sum + (it.qty || 0), 0);
+  const shown = normalized.slice(0, Math.max(1, maxItems));
+  const remaining = Math.max(0, normalized.length - shown.length);
+  const label =
+    shown.map((it) => `${it.name} ×${it.qty}`).join(", ") + (remaining ? ` +${remaining} more` : "");
+  return { label, totalQty };
+}
+
 function toCsv(rows) {
   const escape = (v) => {
     const s = v == null ? "" : String(v);
@@ -141,6 +222,7 @@ export default function ReceiptsReportPage({
   hideEmployeeFilter = false,
   hideStoreFilter = false,
   hideSummary = false,
+  replaceEmployeeColumnWithItems = false,
 }) {
   const lockedEmployeeIdValue = String(lockedEmployeeId || "").trim();
 
@@ -283,6 +365,22 @@ export default function ReceiptsReportPage({
         const parsed = parsePagedResponse(payload, { page, limit });
         const list = extractList(parsed.data).map(normalizeReceipt).filter(Boolean);
 
+        const listWithItems = replaceEmployeeColumnWithItems
+          ? await Promise.all(
+              list.map(async (row) => {
+                try {
+                  const salePayload = await apiRequest(
+                    `/sales/${encodeURIComponent(row.id)}`,
+                  );
+                  const summary = summarizeSaleItems(salePayload);
+                  return { ...row, itemsSummary: summary.label, itemsQty: summary.totalQty };
+                } catch {
+                  return { ...row, itemsSummary: "", itemsQty: 0 };
+                }
+              }),
+            )
+          : list;
+
         const summaryPayload =
           payload?.summary && typeof payload.summary === "object"
             ? payload.summary
@@ -315,7 +413,7 @@ export default function ReceiptsReportPage({
         })();
 
         if (fetchId !== lastFetchId.current) return;
-        setRows(list);
+        setRows(listWithItems);
         setSummary(nextSummary);
         setEmployees(lockedEmployeeIdValue ? [] : employeesFromReport);
         setTotal(parsed.total ?? null);
@@ -347,14 +445,27 @@ export default function ReceiptsReportPage({
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiRequest, employeeId, endDate, limit, lockedEmployeeIdValue, page, q, startDate, storeId]);
+  }, [
+    apiRequest,
+    employeeId,
+    endDate,
+    limit,
+    lockedEmployeeIdValue,
+    page,
+    q,
+    replaceEmployeeColumnWithItems,
+    startDate,
+    storeId,
+  ]);
 
   const exportCsv = useCallback(() => {
-    const header = ["Receipt no.", "Date", "Employee", "Customer", "Type", "Total"];
+    const header = replaceEmployeeColumnWithItems
+      ? ["Receipt no.", "Date", "Items", "Customer", "Type", "Total"]
+      : ["Receipt no.", "Date", "Employee", "Customer", "Type", "Total"];
     const csvRows = rows.map((r) => [
       r.receiptNo,
       r.date ? new Date(r.date).toISOString() : "",
-      r.employee,
+      replaceEmployeeColumnWithItems ? r.itemsSummary : r.employee,
       r.customer,
       r.type,
       (Number(r.total) || 0).toFixed(2),
@@ -362,7 +473,7 @@ export default function ReceiptsReportPage({
     const csv = `${toCsv([header, ...csvRows])}\n`;
     const filename = `receipts_${startDate || "start"}_${endDate || "end"}.csv`;
     downloadTextFile({ filename, content: `\uFEFF${csv}`, mime: "text/csv;charset=utf-8" });
-  }, [endDate, rows, startDate]);
+  }, [endDate, replaceEmployeeColumnWithItems, rows, startDate]);
 
   const rangeLabel = useMemo(() => {
     const start = new Date(startDate);
@@ -583,7 +694,9 @@ export default function ReceiptsReportPage({
                   <tr>
                     <th className="receiptsColNo">Receipt no.</th>
                     <th className="receiptsColDate">Date</th>
-                    <th className="receiptsColEmployee">Employee</th>
+                    <th className="receiptsColEmployee">
+                      {replaceEmployeeColumnWithItems ? "Items" : "Employee"}
+                    </th>
                     <th className="receiptsColCustomer">Customer</th>
                     <th className="receiptsColType">Type</th>
                     <th className="colMoney">Total</th>
@@ -610,7 +723,11 @@ export default function ReceiptsReportPage({
                       >
                         <td className="receiptsColNo">{r.receiptNo || r.id}</td>
                         <td className="receiptsColDate">{formatReceiptDate(r.date)}</td>
-                        <td className="receiptsColEmployee">{r.employee || "--"}</td>
+                        <td className="receiptsColEmployee" title={replaceEmployeeColumnWithItems ? r.itemsSummary : r.employee}>
+                          {replaceEmployeeColumnWithItems
+                            ? r.itemsSummary || "--"
+                            : r.employee || "--"}
+                        </td>
                         <td className="receiptsColCustomer">{r.customer || "--"}</td>
                         <td className="receiptsColType">{r.type || "--"}</td>
                         <td className="colMoney">{formatMoney(r.total)}</td>
@@ -685,8 +802,14 @@ export default function ReceiptsReportPage({
               <div className="receiptsDrawerDivider" aria-hidden="true" />
               <div className="receiptsDrawerMeta">
                 <div className="receiptsDrawerMetaRow">
-                  <span className="receiptsDrawerMetaLabel">Employee</span>
-                  <span className="receiptsDrawerMetaValue">{selected.employee || "--"}</span>
+                  <span className="receiptsDrawerMetaLabel">
+                    {replaceEmployeeColumnWithItems ? "Items" : "Employee"}
+                  </span>
+                  <span className="receiptsDrawerMetaValue">
+                    {replaceEmployeeColumnWithItems
+                      ? selected.itemsSummary || "--"
+                      : selected.employee || "--"}
+                  </span>
                 </div>
                 <div className="receiptsDrawerMetaRow">
                   <span className="receiptsDrawerMetaLabel">Customer</span>

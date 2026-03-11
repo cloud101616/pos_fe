@@ -23,6 +23,8 @@ const moneyFormatter = new Intl.NumberFormat("en-PH", {
   maximumFractionDigits: 2,
 });
 
+const API_ITEMS_LIMIT_CAP = 100;
+
 function formatMoney(value) {
   const numberValue = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(numberValue)) return "—";
@@ -382,58 +384,74 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
       setIsLoading(true);
       setError("");
       try {
-        const qs = buildQueryString({
-          storeId: storeId || undefined,
-          page: itemsPage,
-          limit: itemsLimit,
-          search: search.trim() || undefined,
-        });
-        let payload;
-        try {
-          payload = await apiRequest(`/items${qs}`);
-        } catch (e) {
-          if (storeId) {
+        const apiLimit = Math.min(itemsLimit, API_ITEMS_LIMIT_CAP);
+        const pagesPerUiPage = Math.max(1, Math.ceil(itemsLimit / apiLimit));
+        const apiStartPage = (itemsPage - 1) * pagesPerUiPage + 1;
+        const trimmedSearch = search.trim();
+        const categoryParam = category !== "all" ? category : undefined;
+
+        async function fetchItemsPage(page) {
+          const qs = buildQueryString({
+            storeId: storeId || undefined,
+            page,
+            limit: apiLimit,
+            search: trimmedSearch || undefined,
+            category: categoryParam,
+          });
+
+          try {
+            return await apiRequest(`/items${qs}`);
+          } catch (e) {
+            if (!storeId) throw e;
             const fallbackQs = buildQueryString({
-              page: itemsPage,
-              limit: itemsLimit,
-              search: search.trim() || undefined,
+              page,
+              limit: apiLimit,
+              search: trimmedSearch || undefined,
+              category: categoryParam,
             });
-            payload = await apiRequest(`/items${fallbackQs}`);
-          } else {
-            throw e;
+            return await apiRequest(`/items${fallbackQs}`);
           }
         }
 
-        const parsed = parsePagedResponse(payload, { page: itemsPage, limit: itemsLimit });
-        const data = extractItemsList({ ...payload, data: parsed.data });
-        const list = data.map(toUiItem).filter(Boolean);
+        const combined = [];
+        let total = null;
+        let lastHasNext = null;
+        let lastPayload = null;
+
+        for (let i = 0; i < pagesPerUiPage; i += 1) {
+          const page = apiStartPage + i;
+          const payload = await fetchItemsPage(page);
+          lastPayload = payload;
+
+          const parsed = parsePagedResponse(payload, { page, limit: apiLimit });
+          if (total == null && parsed.total != null) total = parsed.total;
+
+          const data = extractItemsList({ ...payload, data: parsed.data });
+          const mapped = data.map(toUiItem).filter(Boolean);
+          combined.push(...mapped);
+
+          if (typeof parsed.hasNext === "boolean") lastHasNext = parsed.hasNext;
+          if (mapped.length < apiLimit) break;
+        }
+
+        const list = combined.slice(0, itemsLimit);
         if (cancelled) return;
         setItems(list);
-        setItemsTotal(parsed.total ?? null);
+        setItemsTotal(total);
 
-        const hasNextRaw =
-          typeof payload?.hasNext === "boolean"
-            ? payload.hasNext
-            : typeof payload?.has_next === "boolean"
-              ? payload.has_next
-              : null;
         const inferredHasNext =
-          hasNextRaw != null
-            ? hasNextRaw
-            : parsed.total != null
-              ? itemsPage * itemsLimit < parsed.total
-              : list.length === itemsLimit;
+          total != null
+            ? itemsPage * itemsLimit < total
+            : typeof lastHasNext === "boolean"
+              ? lastHasNext
+              : typeof lastPayload?.hasNext === "boolean"
+                ? lastPayload.hasNext
+                : typeof lastPayload?.has_next === "boolean"
+                  ? lastPayload.has_next
+                  : list.length === itemsLimit;
 
-        const hasPrevRaw =
-          typeof payload?.hasPrev === "boolean"
-            ? payload.hasPrev
-            : typeof payload?.has_prev === "boolean"
-              ? payload.has_prev
-              : null;
-        const inferredHasPrev = hasPrevRaw != null ? hasPrevRaw : itemsPage > 1;
-
+        setItemsHasPrev(itemsPage > 1);
         setItemsHasNext(Boolean(inferredHasNext));
-        setItemsHasPrev(Boolean(inferredHasPrev));
         setItemsPageInput(String(itemsPage));
       } catch (e) {
         if (cancelled) return;
@@ -456,7 +474,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
     return () => {
       cancelled = true;
     };
-  }, [apiRequest, storeId, itemsLimit, itemsPage, search]);
+  }, [apiRequest, storeId, itemsLimit, itemsPage, search, category]);
 
   useEffect(() => {
     if (itemsPage !== 1) setItemsPage(1);
@@ -557,6 +575,14 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
     return items
       .filter((item) => {
         if (!item) return false;
+        if (
+          item.trackStock &&
+          typeof item.inStock === "number" &&
+          Number.isFinite(item.inStock) &&
+          item.inStock <= 0
+        ) {
+          return false;
+        }
         if (
           hasStoreTaggedItems &&
           storeId &&

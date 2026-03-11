@@ -331,6 +331,7 @@ function App() {
     if (activePage === "pos" || activePage === "customers" || activePage === "logout")
       return;
     if (activePage === "cashier.mySales") return;
+    if (activePage === "cashier.endOfDayCash") return;
     if (activePage === "items.itemList") return;
 
     if (String(activePage || "").startsWith("items.")) {
@@ -353,6 +354,12 @@ function App() {
     ? [
         { type: "link", id: "pos", label: "Sales", Icon: PosIcon },
         { type: "link", id: "cashier.mySales", label: "My sales", Icon: ReportsIcon },
+        {
+          type: "link",
+          id: "cashier.endOfDayCash",
+          label: "End of Day Cash",
+          Icon: ReportsIcon,
+        },
         { type: "link", id: "items.itemList", label: "Items", Icon: ItemsIcon },
         { type: "link", id: "customers", label: "Customers", Icon: UsersIcon },
         { type: "link", id: "settings", label: "Settings", Icon: SettingsIcon, hidden: true },
@@ -472,6 +479,19 @@ function App() {
           hideEmployeeFilter
           hideStoreFilter
           hideSummary
+          replaceEmployeeColumnWithItems
+        />
+      );
+    if (activePage === "cashier.endOfDayCash")
+      return (
+        <EndOfDayCashPage
+          apiBaseUrl={apiBaseUrl}
+          authToken={authToken}
+          authUser={authUser}
+          lockedEmployeeId={
+            authUser?.id ?? authUser?._id ?? authUser?.userId ?? authUser?.uuid ?? ""
+          }
+          hideStoreFilter
         />
       );
     if (activePage === "settings") return <SettingsPage />;
