@@ -195,26 +195,6 @@ function getSaleDiscountAmount(raw, derivedSubtotal) {
   return Math.max(0, derivedSubtotal - net);
 }
 
-function getSaleCostOfGoods(raw, costByItemId) {
-  if (!raw || typeof raw !== "object") return 0;
-  const rawItems = Array.isArray(raw.items) ? raw.items : [];
-  if (rawItems.length === 0) return 0;
-  return rawItems.reduce((sum, it) => {
-    if (!it || typeof it !== "object") return sum;
-    const itemId = it.itemId ?? it.item_id ?? it.id ?? it._id ?? null;
-    const qty = toPositiveInt(it.qty ?? it.quantity, 0);
-    if (!itemId || qty <= 0) return sum;
-    const directCost =
-      normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost ?? it.costPrice ?? it.cost_price) ??
-      null;
-    const lookupCost =
-      directCost != null
-        ? directCost
-        : normalizeNumber(costByItemId?.get?.(String(itemId))) ?? 0;
-    return sum + lookupCost * qty;
-  }, 0);
-}
-
 export default function EndOfDayCashPage({
   apiBaseUrl,
   authToken,
@@ -341,26 +321,7 @@ export default function EndOfDayCashPage({
           limit: 500,
         });
 
-        const itemsQuery = buildQueryString({
-          limit: 2000,
-          page: 1,
-          storeId: storeId || undefined,
-        });
-
-        const [rawSales, rawItems] = await Promise.all([
-          fetchAllPages(`/sales${query}`, { maxPages: 12 }),
-          apiRequest(`/items${itemsQuery}`).catch(() => null),
-        ]);
-
-        const itemsList = rawItems ? extractSalesList(rawItems) : [];
-        const costByItemId = new Map();
-        for (const it of itemsList) {
-          if (!it || typeof it !== "object") continue;
-          const id = it.id ?? it._id ?? it.itemId ?? it.uuid ?? null;
-          if (!id) continue;
-          const cost = normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost);
-          if (Number.isFinite(cost)) costByItemId.set(String(id), cost);
-        }
+        const rawSales = await fetchAllPages(`/sales${query}`, { maxPages: 12 });
 
         const list = extractSalesList(rawSales);
         const filtered = list.filter((s) => {

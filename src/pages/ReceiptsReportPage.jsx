@@ -139,7 +139,7 @@ function toItemQty(raw) {
   );
 }
 
-function summarizeSaleItems(payload, { maxItems = 4 } = {}) {
+function summarizeSaleItems(payload, { maxItems = null } = {}) {
   const sale = unwrapSalePayload(payload);
   const items = extractSaleItems(sale);
   if (!items.length) return { label: "", totalQty: 0 };
@@ -156,10 +156,12 @@ function summarizeSaleItems(payload, { maxItems = 4 } = {}) {
   if (!normalized.length) return { label: "", totalQty: 0 };
 
   const totalQty = normalized.reduce((sum, it) => sum + (it.qty || 0), 0);
-  const shown = normalized.slice(0, Math.max(1, maxItems));
-  const remaining = Math.max(0, normalized.length - shown.length);
+  const shouldTrim = Number.isFinite(maxItems) && maxItems > 0;
+  const shown = shouldTrim ? normalized.slice(0, Math.max(1, maxItems)) : normalized;
+  const remaining = shouldTrim ? Math.max(0, normalized.length - shown.length) : 0;
   const label =
-    shown.map((it) => `${it.name} ×${it.qty}`).join(", ") + (remaining ? ` +${remaining} more` : "");
+    shown.map((it) => `${it.name} ×${it.qty}`).join("\n") +
+    (remaining ? `\n+${remaining} more` : "");
   return { label, totalQty };
 }
 
@@ -465,7 +467,9 @@ export default function ReceiptsReportPage({
     const csvRows = rows.map((r) => [
       r.receiptNo,
       r.date ? new Date(r.date).toISOString() : "",
-      replaceEmployeeColumnWithItems ? r.itemsSummary : r.employee,
+      replaceEmployeeColumnWithItems
+        ? String(r.itemsSummary || "").replaceAll("\n", "; ")
+        : r.employee,
       r.customer,
       r.type,
       (Number(r.total) || 0).toFixed(2),
@@ -723,7 +727,15 @@ export default function ReceiptsReportPage({
                       >
                         <td className="receiptsColNo">{r.receiptNo || r.id}</td>
                         <td className="receiptsColDate">{formatReceiptDate(r.date)}</td>
-                        <td className="receiptsColEmployee" title={replaceEmployeeColumnWithItems ? r.itemsSummary : r.employee}>
+                        <td
+                          className="receiptsColEmployee"
+                          title={replaceEmployeeColumnWithItems ? r.itemsSummary : r.employee}
+                          style={
+                            replaceEmployeeColumnWithItems
+                              ? { whiteSpace: "pre-line" }
+                              : undefined
+                          }
+                        >
                           {replaceEmployeeColumnWithItems
                             ? r.itemsSummary || "--"
                             : r.employee || "--"}
@@ -805,7 +817,14 @@ export default function ReceiptsReportPage({
                   <span className="receiptsDrawerMetaLabel">
                     {replaceEmployeeColumnWithItems ? "Items" : "Employee"}
                   </span>
-                  <span className="receiptsDrawerMetaValue">
+                  <span
+                    className="receiptsDrawerMetaValue"
+                    style={
+                      replaceEmployeeColumnWithItems
+                        ? { whiteSpace: "pre-line" }
+                        : undefined
+                    }
+                  >
                     {replaceEmployeeColumnWithItems
                       ? selected.itemsSummary || "--"
                       : selected.employee || "--"}
