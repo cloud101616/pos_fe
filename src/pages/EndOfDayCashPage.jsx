@@ -195,6 +195,26 @@ function getSaleDiscountAmount(raw, derivedSubtotal) {
   return Math.max(0, derivedSubtotal - net);
 }
 
+function getSaleCostOfGoods(raw, costByItemId) {
+  if (!raw || typeof raw !== "object") return 0;
+  const rawItems = Array.isArray(raw.items) ? raw.items : [];
+  if (rawItems.length === 0) return 0;
+  return rawItems.reduce((sum, it) => {
+    if (!it || typeof it !== "object") return sum;
+    const itemId = it.itemId ?? it.item_id ?? it.id ?? it._id ?? null;
+    const qty = toPositiveInt(it.qty ?? it.quantity, 0);
+    if (!itemId || qty <= 0) return sum;
+    const directCost =
+      normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost ?? it.costPrice ?? it.cost_price) ??
+      null;
+    const lookupCost =
+      directCost != null
+        ? directCost
+        : normalizeNumber(costByItemId?.get?.(String(itemId))) ?? 0;
+    return sum + lookupCost * qty;
+  }, 0);
+}
+
 export default function EndOfDayCashPage({
   apiBaseUrl,
   authToken,
@@ -205,6 +225,7 @@ export default function EndOfDayCashPage({
   const todayKey = useMemo(() => formatIsoDateInput(new Date()), []);
   const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
   const canPickStore = authRole === "admin" || authRole === "owner";
+  const showGrossProfit = authRole !== "cashier";
   const reportStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
   const lockedCashierId = useMemo(() => String(lockedEmployeeId || "").trim(), [lockedEmployeeId]);
 
@@ -216,6 +237,7 @@ export default function EndOfDayCashPage({
   const [grossSales, setGrossSales] = useState(0);
   const [netSales, setNetSales] = useState(0);
   const [discounts, setDiscounts] = useState(0);
+  const [grossProfit, setGrossProfit] = useState(0);
 
   const lastFetchId = useRef(0);
 
@@ -321,7 +343,30 @@ export default function EndOfDayCashPage({
           limit: 500,
         });
 
-        const rawSales = await fetchAllPages(`/sales${query}`, { maxPages: 12 });
+        const itemsQuery = buildQueryString({
+          storeId: storeId || undefined,
+          page: 1,
+          limit: 100,
+        });
+
+        const [rawSales, rawItems] = await Promise.all([
+          fetchAllPages(`/sales${query}`, { maxPages: 12 }),
+          showGrossProfit
+            ? fetchAllPages(`/items${itemsQuery}`, { maxPages: 50 }).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+
+        const costByItemId = new Map();
+        if (showGrossProfit && rawItems) {
+          const itemsList = extractSalesList(rawItems);
+          for (const it of itemsList) {
+            if (!it || typeof it !== "object") continue;
+            const id = it.id ?? it._id ?? it.itemId ?? it.uuid ?? null;
+            if (!id) continue;
+            const cost = normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost);
+            if (Number.isFinite(cost)) costByItemId.set(String(id), cost);
+          }
+        }
 
         const list = extractSalesList(rawSales);
         const filtered = list.filter((s) => {
@@ -338,29 +383,33 @@ export default function EndOfDayCashPage({
             const gross = saleGross ?? 0;
             const net = getSaleNetSales(s, saleGross) ?? 0;
             const discount = getSaleDiscountAmount(s, saleGross) ?? 0;
+            const cogs = showGrossProfit ? getSaleCostOfGoods(s, costByItemId) : 0;
             acc.grossSales += gross;
             acc.netSales += net;
             acc.discounts += Math.max(0, discount);
+            acc.grossProfit += net - cogs;
             return acc;
           },
-          { grossSales: 0, netSales: 0, discounts: 0 },
+          { grossSales: 0, netSales: 0, discounts: 0, grossProfit: 0 },
         );
 
         if (fetchId !== lastFetchId.current) return;
         setGrossSales(Math.round(totals.grossSales * 100) / 100);
         setNetSales(Math.round(totals.netSales * 100) / 100);
         setDiscounts(Math.round(totals.discounts * 100) / 100);
+        setGrossProfit(Math.round(totals.grossProfit * 100) / 100);
       } catch (e) {
         if (fetchId !== lastFetchId.current) return;
         setError(e instanceof Error ? e.message : "Failed to load end-of-day cash.");
         setGrossSales(0);
         setNetSales(0);
         setDiscounts(0);
+        setGrossProfit(0);
       } finally {
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiBaseUrl, apiRequest, date, fetchAllPages, lockedCashierId, storeId]);
+  }, [apiBaseUrl, apiRequest, date, fetchAllPages, lockedCashierId, showGrossProfit, storeId]);
 
   return (
     <div className="page salesSummaryPage">
@@ -443,6 +492,18 @@ export default function EndOfDayCashPage({
             {isLoading ? "Loading..." : `For ${date || "--"}`}
           </div>
         </div>
+
+        {showGrossProfit ? (
+          <div className="card salesSummaryKpiCard">
+            <div className="salesSummaryKpiLabel">Gross profit</div>
+            <div className="salesSummaryKpiValue">
+              {isLoading ? "--" : formatMoney(grossProfit)}
+            </div>
+            <div className="salesSummaryKpiDelta salesSummaryKpiDeltaUp">
+              {isLoading ? "Loading..." : `For ${date || "--"}`}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
