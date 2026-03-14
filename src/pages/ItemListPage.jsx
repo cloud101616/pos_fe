@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildQueryString,
   compareValues,
+  downloadTextFile,
   getActorHeaders,
   getAuthUserRole,
   getFetchCredentials,
   getReportStoreId,
   loadCategoriesFromStorage,
   loadCategoryNamesFromStorage,
+  parseCsv,
   parsePagedResponse,
+  toCsv,
   toPositiveInt,
 } from "../utils/common.js";
 import { makeStoreOptions, useStoresList } from "../utils/stores.js";
@@ -20,6 +23,45 @@ const moneyFormatter = new Intl.NumberFormat("en-PH", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+
+const ITEM_CSV_HEADERS = [
+  "id",
+  "name",
+  "category",
+  "categoryId",
+  "description",
+  "isForSale",
+  "soldBy",
+  "price",
+  "cost",
+  "sku",
+  "barcode",
+  "trackStock",
+  "inStock",
+  "storeId",
+  "storeName",
+];
+
+const ITEM_CSV_TEMPLATE_ROW = [
+  "",
+  "Sample item",
+  "Beverages",
+  "",
+  "Optional description",
+  "true",
+  "each",
+  "49.50",
+  "30.00",
+  "1001",
+  "1234567890123",
+  "true",
+  "25",
+  "",
+  "Main Store",
+];
+
+const CSV_TRUE_VALUES = new Set(["1", "true", "yes", "y"]);
+const CSV_FALSE_VALUES = new Set(["0", "false", "no", "n"]);
 
 function formatMoney(value) {
   const numberValue = typeof value === "number" ? value : Number(value);
@@ -139,6 +181,12 @@ function toUiItem(apiItem, categoryNameById) {
     name: String(apiItem.name ?? ""),
     category,
     categoryId,
+    description: String(apiItem.description ?? ""),
+    isForSale: Boolean(apiItem.isForSale ?? apiItem.is_for_sale ?? true),
+    soldBy: String(apiItem.soldBy ?? apiItem.sold_by ?? "each"),
+    sku: apiItem.sku == null ? "" : String(apiItem.sku),
+    barcode: apiItem.barcode == null ? "" : String(apiItem.barcode),
+    trackStock: Boolean(apiItem.trackStock ?? apiItem.track_stock ?? false),
     storeId,
     storeName,
     price: typeof price === "number" ? price : price == null || price === "" ? null : Number(price),
@@ -150,6 +198,79 @@ function toUiItem(apiItem, categoryNameById) {
           ? null
           : Number(inStock),
   };
+}
+
+function normalizeCsvHeader(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/^\uFEFF/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function isBlankRow(row) {
+  return !row.some((cell) => String(cell ?? "").trim());
+}
+
+function getCsvCell(row, headerIndex, ...aliases) {
+  for (const alias of aliases) {
+    const key = normalizeCsvHeader(alias);
+    if (!key || !headerIndex.has(key)) continue;
+    return String(row[headerIndex.get(key)] ?? "").trim();
+  }
+  return "";
+}
+
+function parseCsvBoolean(value, fallback) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (CSV_TRUE_VALUES.has(normalized)) return true;
+  if (CSV_FALSE_VALUES.has(normalized)) return false;
+  return fallback;
+}
+
+function normalizeSoldBy(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "weight" || normalized === "weightvolume" || normalized === "volume")
+    return "weight";
+  return "each";
+}
+
+function toNumberOrNull(value) {
+  if (value == null || value === "") return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function toIntOrNull(value) {
+  if (value == null || value === "") return null;
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return null;
+  return Math.trunc(numberValue);
+}
+
+function formatCsvValue(value) {
+  return value == null ? "" : String(value);
+}
+
+function toCsvRow(item) {
+  return [
+    formatCsvValue(item.id),
+    formatCsvValue(item.name),
+    formatCsvValue(item.category),
+    formatCsvValue(item.categoryId),
+    formatCsvValue(item.description),
+    item.isForSale ? "true" : "false",
+    formatCsvValue(item.soldBy || "each"),
+    formatCsvValue(item.price),
+    formatCsvValue(item.cost),
+    formatCsvValue(item.sku),
+    formatCsvValue(item.barcode),
+    item.trackStock ? "true" : "false",
+    formatCsvValue(item.inStock),
+    formatCsvValue(item.storeId),
+    formatCsvValue(item.storeName),
+  ];
 }
 
 export default function ItemListPage({
@@ -167,8 +288,12 @@ export default function ItemListPage({
   const [category, setCategory] = useState("all");
   const [sort, setSort] = useState({ key: "name", direction: "asc" });
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+
+  const fileInputRef = useRef(null);
 
   const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
   const canPickStore = authRole === "admin" || authRole === "owner";
@@ -190,29 +315,6 @@ export default function ItemListPage({
       "",
   ).trim();
 
-  function isInAssignedStore(item) {
-    if (canPickStore && !forcedStoreId) return true;
-
-    const restrictionStoreId = forcedStoreId || reportStoreId;
-    const restrictionStoreName = forcedStoreId
-      ? String(storeNameById?.get?.(forcedStoreId) || "").trim()
-      : assignedStoreName;
-
-    if (!restrictionStoreId && !restrictionStoreName) return true;
-    const itemStoreId = String(item?.storeId ?? "").trim();
-    const itemStoreName = String(item?.storeName ?? "").trim();
-
-    if (restrictionStoreId && itemStoreId && itemStoreId === restrictionStoreId) return true;
-    if (
-      restrictionStoreName &&
-      itemStoreName &&
-      itemStoreName.toLowerCase() === restrictionStoreName.toLowerCase()
-    ) {
-      return true;
-    }
-    return false;
-  }
-
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
   const [total, setTotal] = useState(null);
@@ -220,6 +322,26 @@ export default function ItemListPage({
   const [hasPrev, setHasPrev] = useState(false);
   const totalPages = total ? Math.max(1, Math.ceil(total / limit)) : null;
   const [pageInput, setPageInput] = useState("1");
+
+  const storedCategories = useMemo(() => loadCategoriesFromStorage(), []);
+
+  const categoryNameById = useMemo(() => {
+    const map = new Map();
+    for (const categoryOption of storedCategories) {
+      if (!categoryOption?.id || !categoryOption?.name) continue;
+      map.set(String(categoryOption.id), String(categoryOption.name));
+    }
+    return map;
+  }, [storedCategories]);
+
+  const categoryIdByName = useMemo(() => {
+    const map = new Map();
+    for (const categoryOption of storedCategories) {
+      if (!categoryOption?.id || !categoryOption?.name) continue;
+      map.set(String(categoryOption.name).trim().toLowerCase(), String(categoryOption.id));
+    }
+    return map;
+  }, [storedCategories]);
 
   const getAuthHeaders = useCallback(() => {
     const headers = { "Content-Type": "application/json" };
@@ -275,11 +397,53 @@ export default function ItemListPage({
     return map;
   }, [storeOptions]);
 
+  const storeIdByName = useMemo(() => {
+    const map = new Map();
+    for (const option of storeOptions) {
+      const name = String(option.name || "").trim().toLowerCase();
+      if (!name) continue;
+      map.set(name, String(option.id));
+    }
+    return map;
+  }, [storeOptions]);
+
   const activeStoreName = useMemo(() => {
     const key = String(storeId || "").trim();
     if (!key) return "";
     return String(storeNameById.get(key) || "").trim();
   }, [storeId, storeNameById]);
+
+  const defaultImportStoreId = useMemo(() => {
+    if (forcedStoreId) return forcedStoreId;
+    if (!canPickStore) return String(reportStoreId || storeId || "").trim();
+    return String(storeId || "").trim();
+  }, [canPickStore, forcedStoreId, reportStoreId, storeId]);
+
+  const isInAssignedStore = useCallback(
+    (item) => {
+      if (canPickStore && !forcedStoreId) return true;
+
+      const restrictionStoreId = forcedStoreId || reportStoreId;
+      const restrictionStoreName = forcedStoreId
+        ? String(storeNameById?.get?.(forcedStoreId) || "").trim()
+        : assignedStoreName;
+
+      if (!restrictionStoreId && !restrictionStoreName) return true;
+      const itemStoreId = String(item?.storeId ?? "").trim();
+      const itemStoreName = String(item?.storeName ?? "").trim();
+
+      if (restrictionStoreId && itemStoreId && itemStoreId === restrictionStoreId) return true;
+      if (
+        restrictionStoreName &&
+        itemStoreName &&
+        itemStoreName.toLowerCase() === restrictionStoreName.toLowerCase()
+      ) {
+        return true;
+      }
+      return false;
+    },
+    [assignedStoreName, canPickStore, forcedStoreId, reportStoreId, storeNameById],
+  );
 
   useEffect(() => {
     if (forcedStoreId) {
@@ -305,59 +469,61 @@ export default function ItemListPage({
     return Array.from(unique).filter(Boolean).sort();
   }, [items]);
 
-  const categoryNameById = useMemo(() => {
-    const map = new Map();
-    for (const c of loadCategoriesFromStorage()) {
-      if (!c?.id || !c?.name) continue;
-      map.set(String(c.id), String(c.name));
-    }
-    return map;
-  }, []);
+  const filterItemsList = useCallback(
+    (sourceItems) => {
+      let list = Array.isArray(sourceItems) ? sourceItems : [];
 
-  const visibleItems = useMemo(() => {
-    let list = items;
+      if (storeId) {
+        const activeId = String(storeId || "").trim();
+        const activeName = activeStoreName.trim().toLowerCase();
 
-    if (storeId) {
-      const activeId = String(storeId || "").trim();
-      const activeName = activeStoreName.trim().toLowerCase();
+        list = list.filter((item) => {
+          const itemStoreId = String(item?.storeId ?? "").trim();
+          if (itemStoreId && itemStoreId === activeId) return true;
 
-      list = list.filter((item) => {
-        const itemStoreId = String(item?.storeId ?? "").trim();
-        if (itemStoreId && itemStoreId === activeId) return true;
+          if (!itemStoreId && activeName) {
+            const itemStoreName = String(item?.storeName ?? "").trim().toLowerCase();
+            return Boolean(itemStoreName) && itemStoreName === activeName;
+          }
 
-        if (!itemStoreId && activeName) {
-          const itemStoreName = String(item?.storeName ?? "").trim().toLowerCase();
-          return Boolean(itemStoreName) && itemStoreName === activeName;
-        }
+          return false;
+        });
+      }
 
-        return false;
+      if (category !== "all") list = list.filter((item) => item.category === category);
+
+      const q = (searchQuery || "").trim().toLowerCase();
+      if (!q) return list;
+
+      return list.filter((item) => {
+        const haystack = `${item?.name ?? ""} ${item?.category ?? ""} ${item?.storeName ?? ""}`
+          .trim()
+          .toLowerCase();
+        return haystack.includes(q);
       });
-    }
-    if (category !== "all") list = list.filter((item) => item.category === category);
+    },
+    [activeStoreName, category, searchQuery, storeId],
+  );
 
-    const q = (searchQuery || "").trim().toLowerCase();
-    if (!q) return list;
+  const sortItemsList = useCallback(
+    (sourceItems) => {
+      const factor = sort.direction === "asc" ? 1 : -1;
 
-    return list.filter((item) => {
-      const haystack = `${item?.name ?? ""} ${item?.category ?? ""} ${item?.storeName ?? ""}`
-        .trim()
-        .toLowerCase();
-      return haystack.includes(q);
-    });
-  }, [activeStoreName, category, items, searchQuery, storeId]);
+      return [...sourceItems].sort((a, b) => {
+        const primary = compareValues(getSortValue(a, sort.key), getSortValue(b, sort.key));
+        if (primary !== 0) return primary * factor;
 
-  const sortedItems = useMemo(() => {
-    const factor = sort.direction === "asc" ? 1 : -1;
+        const byName = compareValues(a.name ?? "", b.name ?? "");
+        if (byName !== 0) return byName;
+        return compareValues(a.id ?? "", b.id ?? "");
+      });
+    },
+    [sort.direction, sort.key],
+  );
 
-    return [...visibleItems].sort((a, b) => {
-      const primary = compareValues(getSortValue(a, sort.key), getSortValue(b, sort.key));
-      if (primary !== 0) return primary * factor;
+  const visibleItems = useMemo(() => filterItemsList(items), [filterItemsList, items]);
 
-      const byName = compareValues(a.name ?? "", b.name ?? "");
-      if (byName !== 0) return byName;
-      return compareValues(a.id ?? "", b.id ?? "");
-    });
-  }, [visibleItems, sort.direction, sort.key]);
+  const sortedItems = useMemo(() => sortItemsList(visibleItems), [sortItemsList, visibleItems]);
 
   useEffect(() => {
     if (!compact) return;
@@ -366,7 +532,7 @@ export default function ItemListPage({
     }
   }, [compact, sort.key]);
 
-  async function reloadItems() {
+  const reloadItems = useCallback(async () => {
     if (!apiBaseUrl) return;
     setIsLoading(true);
     setError("");
@@ -391,7 +557,18 @@ export default function ItemListPage({
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [
+    apiBaseUrl,
+    apiRequest,
+    canPickStore,
+    categoryNameById,
+    forcedStoreId,
+    isInAssignedStore,
+    limit,
+    page,
+    searchQuery,
+    storeId,
+  ]);
 
   useEffect(() => {
     if (!apiBaseUrl) return;
@@ -404,8 +581,7 @@ export default function ItemListPage({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBaseUrl, authToken, page, limit, searchQuery, storeId]);
+  }, [apiBaseUrl, authToken, reloadItems]);
 
   useEffect(() => {
     if (page !== 1) setPage(1);
@@ -422,6 +598,7 @@ export default function ItemListPage({
       return;
     }
 
+    setMessage("");
     setIsSaving(true);
     setError("");
     try {
@@ -433,6 +610,278 @@ export default function ItemListPage({
       setIsSaving(false);
     }
   }
+
+  const fetchAllItemsForExport = useCallback(async () => {
+    const allItems = [];
+    let nextPage = 1;
+    const exportLimit = 200;
+
+    while (nextPage <= 50) {
+      const qs = buildQueryString({
+        page: nextPage,
+        limit: exportLimit,
+        search: (searchQuery || "").trim() || undefined,
+        storeId: storeId || undefined,
+      });
+      const payload = await apiRequest(`/items${qs}`);
+      const paged = parsePagedResponse(payload, { page: nextPage, limit: exportLimit });
+      const apiItems = extractItemsList({ ...payload, data: paged.data });
+      const mapped = apiItems.map((item) => toUiItem(item, categoryNameById)).filter(Boolean);
+      allItems.push(
+        ...(forcedStoreId || !canPickStore ? mapped.filter(isInAssignedStore) : mapped),
+      );
+      if (!paged.hasNext || !apiItems.length) break;
+      nextPage += 1;
+    }
+
+    return sortItemsList(filterItemsList(allItems));
+  }, [
+    apiRequest,
+    canPickStore,
+    categoryNameById,
+    filterItemsList,
+    forcedStoreId,
+    isInAssignedStore,
+    searchQuery,
+    sortItemsList,
+    storeId,
+  ]);
+
+  const exportItems = useCallback(async () => {
+    if (!apiBaseUrl) {
+      setError("API base URL is not configured.");
+      return;
+    }
+
+    setIsExporting(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const exportItemsList = await fetchAllItemsForExport();
+      if (!exportItemsList.length) {
+        setError("No items available to export.");
+        return;
+      }
+
+      const csv = `${toCsv([ITEM_CSV_HEADERS, ...exportItemsList.map(toCsvRow)])}\n`;
+      const filename = `items_${new Date().toISOString().slice(0, 10)}.csv`;
+      downloadTextFile({
+        filename,
+        content: `\uFEFF${csv}`,
+        mime: "text/csv;charset=utf-8",
+      });
+      setMessage(`Exported ${exportItemsList.length} item(s) to CSV.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to export items.");
+    } finally {
+      setIsExporting(false);
+    }
+  }, [apiBaseUrl, fetchAllItemsForExport]);
+
+  const downloadTemplate = useCallback(() => {
+    setError("");
+    setMessage("");
+
+    const csv = `${toCsv([ITEM_CSV_HEADERS, ITEM_CSV_TEMPLATE_ROW])}\n`;
+    downloadTextFile({
+      filename: "items_template.csv",
+      content: `\uFEFF${csv}`,
+      mime: "text/csv;charset=utf-8",
+    });
+    setMessage("Downloaded item CSV template.");
+  }, []);
+
+  function triggerImportPicker() {
+    if (isLoading || isSaving || isExporting) return;
+    fileInputRef.current?.click();
+  }
+
+  const importItemsFromFile = useCallback(
+    async (event) => {
+      const input = event.target;
+      const file = input.files?.[0];
+      input.value = "";
+      if (!file) return;
+
+      if (!apiBaseUrl) {
+        setError("API base URL is not configured.");
+        return;
+      }
+
+      setError("");
+      setMessage("");
+
+      try {
+        if (!/\.csv$/i.test(String(file.name || "").trim())) {
+          throw new Error(
+            "Please upload a .csv file. If you created it in Excel, use Save As -> CSV UTF-8 (Comma delimited) (*.csv).",
+          );
+        }
+
+        const text = await file.text();
+        const parsedRows = parseCsv(text);
+        if (!parsedRows.length) throw new Error("CSV file is empty.");
+
+        const headerIndex = new Map();
+        (parsedRows[0] || []).forEach((header, index) => {
+          const normalized = normalizeCsvHeader(header);
+          if (normalized && !headerIndex.has(normalized)) headerIndex.set(normalized, index);
+        });
+
+        if (!headerIndex.has("name")) {
+          const foundHeaders = (parsedRows[0] || [])
+            .map((header) => String(header || "").trim())
+            .filter(Boolean)
+            .join(", ");
+          const suffix = foundHeaders ? ` Found headers: ${foundHeaders}.` : "";
+          throw new Error(
+            `CSV must include a name column.${suffix} If this came from Excel, save it as CSV UTF-8 (*.csv) before importing.`,
+          );
+        }
+
+        const dataRows = parsedRows
+          .slice(1)
+          .map((row, index) => ({ row, rowNumber: index + 2 }))
+          .filter(({ row }) => !isBlankRow(row));
+
+        if (!dataRows.length) {
+          throw new Error("CSV must include at least one item row.");
+        }
+
+        const shouldImport = window.confirm(
+          `Import ${dataRows.length} item row(s)? Rows with an ID will update existing items.`,
+        );
+        if (!shouldImport) return;
+
+        setIsSaving(true);
+
+        let createdCount = 0;
+        let updatedCount = 0;
+        const failures = [];
+
+        for (const { row, rowNumber } of dataRows) {
+          try {
+            const itemId = getCsvCell(row, headerIndex, "id", "itemId");
+            const name = getCsvCell(row, headerIndex, "name");
+            if (!name) throw new Error("Name is required.");
+
+            const categoryNameRaw = getCsvCell(
+              row,
+              headerIndex,
+              "category",
+              "categoryName",
+              "category_name",
+            );
+            const categoryIdRaw = getCsvCell(row, headerIndex, "categoryId", "category_id");
+            const normalizedCategoryName = categoryNameRaw.trim();
+            const normalizedCategoryId =
+              categoryIdRaw.trim() ||
+              (normalizedCategoryName
+                ? categoryIdByName.get(normalizedCategoryName.toLowerCase()) || ""
+                : "");
+            const resolvedCategoryName =
+              normalizedCategoryName ||
+              (normalizedCategoryId ? categoryNameById.get(normalizedCategoryId) || "" : "");
+
+            let resolvedStoreId = defaultImportStoreId;
+            if (canPickStore && !forcedStoreId) {
+              const csvStoreId = getCsvCell(row, headerIndex, "storeId", "store_id");
+              const csvStoreName = getCsvCell(row, headerIndex, "storeName", "store_name");
+
+              if (csvStoreId) {
+                resolvedStoreId = csvStoreId;
+              } else if (csvStoreName) {
+                resolvedStoreId = storeIdByName.get(csvStoreName.toLowerCase()) || "";
+              }
+            }
+
+            if (!resolvedStoreId) {
+              throw new Error("Store is required. Include storeId/storeName or select a store filter.");
+            }
+
+            const price = toNumberOrNull(getCsvCell(row, headerIndex, "price"));
+            const cost = toNumberOrNull(getCsvCell(row, headerIndex, "cost"));
+            const inStockRaw = getCsvCell(row, headerIndex, "inStock", "stock", "qty");
+            const trackStock = parseCsvBoolean(
+              getCsvCell(row, headerIndex, "trackStock", "track_stock"),
+              Boolean(inStockRaw),
+            );
+            const skuRaw = getCsvCell(row, headerIndex, "sku");
+            const skuNumber = toIntOrNull(skuRaw);
+
+            const payload = {
+              name,
+              category: resolvedCategoryName
+                ? { id: normalizedCategoryId || null, name: resolvedCategoryName }
+                : null,
+              description: getCsvCell(row, headerIndex, "description"),
+              isForSale: parseCsvBoolean(
+                getCsvCell(row, headerIndex, "isForSale", "is_for_sale"),
+                true,
+              ),
+              soldBy: normalizeSoldBy(getCsvCell(row, headerIndex, "soldBy", "sold_by")),
+              price,
+              cost,
+              sku: skuNumber ?? (skuRaw || ""),
+              barcode: getCsvCell(row, headerIndex, "barcode"),
+              trackStock,
+              storeId: resolvedStoreId,
+            };
+
+            if (trackStock) {
+              payload.inStock = toIntOrNull(inStockRaw);
+            }
+
+            if (itemId) {
+              await apiRequest(`/items/${encodeURIComponent(itemId)}`, {
+                method: "PATCH",
+                body: payload,
+              });
+              updatedCount += 1;
+            } else {
+              await apiRequest("/items", { method: "POST", body: payload });
+              createdCount += 1;
+            }
+          } catch (e) {
+            failures.push(
+              `Row ${rowNumber}: ${e instanceof Error ? e.message : "Failed to import row."}`,
+            );
+          }
+        }
+
+        await reloadItems();
+
+        const importedCount = createdCount + updatedCount;
+        if (importedCount > 0) {
+          setMessage(`Imported ${importedCount} item(s): ${createdCount} created, ${updatedCount} updated.`);
+        }
+
+        if (failures.length) {
+          const preview = failures.slice(0, 5).join(" ");
+          const suffix = failures.length > 5 ? ` ${failures.length - 5} more row(s) failed.` : "";
+          setError(`Some rows could not be imported. ${preview}${suffix}`);
+        } else if (!importedCount) {
+          setError("No rows were imported.");
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to import CSV.");
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [
+      apiBaseUrl,
+      apiRequest,
+      canPickStore,
+      categoryIdByName,
+      categoryNameById,
+      defaultImportStoreId,
+      forcedStoreId,
+      reloadItems,
+      storeIdByName,
+    ],
+  );
 
   function toggleSort(key) {
     setSort((prev) => {
@@ -469,12 +918,52 @@ export default function ItemListPage({
               className="btn btnPrimary itemListAddBtn"
               type="button"
               onClick={() => onAddItem?.()}
-              disabled={!onAddItem}
+              disabled={!onAddItem || isSaving}
               title={!onAddItem ? "Not available" : undefined}
             >
               + Add item
             </button>
           ) : null}
+
+          <div className="itemListToolbarActions">
+            <button
+              className="btn btnGhost btnSmall"
+              type="button"
+              onClick={downloadTemplate}
+              disabled={isSaving || isExporting}
+            >
+              CSV Template
+            </button>
+
+            <button
+              className="btn btnGhost btnSmall"
+              type="button"
+              onClick={exportItems}
+              disabled={isLoading || isSaving || isExporting}
+            >
+              {isExporting ? "Exporting..." : "Export CSV"}
+            </button>
+
+            {!readOnly ? (
+              <button
+                className="btn btnGhost btnSmall"
+                type="button"
+                onClick={triggerImportPicker}
+                disabled={isLoading || isSaving || isExporting}
+              >
+                {isSaving ? "Importing..." : "Import CSV"}
+              </button>
+            ) : null}
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="itemListHiddenInput"
+              onChange={importItemsFromFile}
+              tabIndex={-1}
+            />
+          </div>
 
           <div className="itemListToolbarSpacer" />
 
@@ -528,6 +1017,18 @@ export default function ItemListPage({
             </label>
           ) : null}
         </div>
+
+        <div className="itemListImportHint">
+          CSV columns: <code>name</code> is required. <code>id</code> updates an existing item;
+          without it, a new item is created. Use <code>storeId</code> or <code>storeName</code>{" "}
+          when importing across stores. Use <code>CSV Template</code> for the ready-made format.
+        </div>
+
+        {message ? (
+          <div className="authSuccess" style={{ margin: "0 16px 12px" }}>
+            {message}
+          </div>
+        ) : null}
 
         {error ? (
           <div className="authError" style={{ margin: "0 16px 12px" }}>
@@ -615,7 +1116,7 @@ export default function ItemListPage({
               {sortedItems.length === 0 ? (
                 <tr>
                   <td colSpan={columnCount} className="usersEmpty">
-                    {isLoading ? "Loading…" : "No items found."}
+                    {isLoading ? "Loading..." : "No items found."}
                   </td>
                 </tr>
               ) : (
@@ -623,13 +1124,11 @@ export default function ItemListPage({
                   <tr key={item.id}>
                     <td className="colName">{item.name}</td>
                     <td className="colCategory">
-                      <span className="cellSelect">{item.category || "—"}</span>
+                      <span className="cellSelect">{item.category || "--"}</span>
                     </td>
                     {showStore ? (
                       <td className="colStore">
-                      <span className="cellSelect">
-                        {item.storeName || item.storeId || "—"}
-                      </span>
+                        <span className="cellSelect">{item.storeName || item.storeId || "--"}</span>
                       </td>
                     ) : null}
                     <td className="colMoney">{formatMoney(item.price)}</td>
@@ -637,7 +1136,7 @@ export default function ItemListPage({
                     {showMargin ? (
                       <td className="colMoney">{formatMarginPercent(item)}</td>
                     ) : null}
-                    <td className="colStock">{item.inStock ?? "—"}</td>
+                    <td className="colStock">{item.inStock ?? "--"}</td>
                     {showActions ? (
                       <td className="colActions">
                         <div className="usersActions">
@@ -711,7 +1210,7 @@ export default function ItemListPage({
               }}
               aria-label="Page number"
             />
-            <span>of {totalPages ?? "—"}</span>
+            <span>of {totalPages ?? "--"}</span>
           </div>
 
           <div className="pagerMeta">

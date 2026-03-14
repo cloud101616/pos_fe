@@ -566,6 +566,12 @@
   padding: 14px 16px;
 }
 
+.itemListToolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .itemListToolbarSpacer {
   flex: 1;
 }
@@ -574,6 +580,22 @@
   text-transform: uppercase;
   border-radius: 2px;
   padding: 10px 14px;
+}
+
+.itemListHiddenInput {
+  display: none;
+}
+
+.itemListImportHint {
+  padding: 0 16px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.itemListImportHint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
 }
 
 .field {
@@ -780,6 +802,16 @@
 .authError {
   border: 1px solid rgba(239, 68, 68, 0.35);
   background: rgba(239, 68, 68, 0.08);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.authSuccess {
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.08);
   color: var(--text);
   padding: 10px 12px;
   border-radius: 10px;

@@ -232,3 +232,150 @@ export function parsePagedResponse(payload, fallbacks = {}) {
 
   return { data, page, limit, total, hasNext, hasPrev };
 }
+
+export function toCsv(rows) {
+  const escape = (value) => {
+    const text = value == null ? "" : String(value);
+    if (/[",\n]/.test(text)) return `"${text.replaceAll('"', '""')}"`;
+    return text;
+  };
+
+  return (Array.isArray(rows) ? rows : []).map((row) => row.map(escape).join(",")).join("\n");
+}
+
+export function downloadTextFile({ filename, content, mime = "text/plain;charset=utf-8" }) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function countDelimiterCandidates(line, delimiter) {
+  let count = 0;
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+
+    if (char === '"') {
+      if (inQuotes && line[index + 1] === '"') {
+        index += 1;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (!inQuotes && char === delimiter) count += 1;
+  }
+
+  return count;
+}
+
+function detectCsvDelimiter(input) {
+  const candidates = [",", ";", "\t"];
+  const previewLines = String(input ?? "")
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+
+  if (!previewLines.length) return ",";
+
+  let bestDelimiter = ",";
+  let bestScore = -1;
+
+  for (const candidate of candidates) {
+    const score = previewLines.reduce(
+      (sum, line) => sum + countDelimiterCandidates(line, candidate),
+      0,
+    );
+    if (score > bestScore) {
+      bestDelimiter = candidate;
+      bestScore = score;
+    }
+  }
+
+  return bestDelimiter;
+}
+
+export function parseCsv(text, options = {}) {
+  const input = String(text ?? "").replace(/^\uFEFF/, "");
+  const delimiter =
+    typeof options?.delimiter === "string" && options.delimiter
+      ? options.delimiter
+      : detectCsvDelimiter(input);
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let index = 0;
+  let inQuotes = false;
+
+  while (index < input.length) {
+    const char = input[index];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (input[index + 1] === '"') {
+          cell += '"';
+          index += 2;
+          continue;
+        }
+        inQuotes = false;
+        index += 1;
+        continue;
+      }
+
+      cell += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+      index += 1;
+      continue;
+    }
+
+    if (char === delimiter) {
+      row.push(cell);
+      cell = "";
+      index += 1;
+      continue;
+    }
+
+    if (char === "\r") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      index += input[index + 1] === "\n" ? 2 : 1;
+      continue;
+    }
+
+    if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      index += 1;
+      continue;
+    }
+
+    cell += char;
+    index += 1;
+  }
+
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+
+  return rows;
+}
