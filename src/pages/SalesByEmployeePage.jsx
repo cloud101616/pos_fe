@@ -275,9 +275,10 @@ export default function SalesByEmployeePage({ apiBaseUrl, authToken, authUser })
             const grossSales = normalizeNumber(r.grossSales ?? r.gross_sales) ?? 0;
             const refunds = normalizeNumber(r.refunds) ?? 0;
             const discounts = normalizeNumber(r.discounts) ?? 0;
-            const netSales =
+            const netBeforeRefunds =
               normalizeNumber(r.netSales ?? r.net_sales) ??
-              Math.max(0, grossSales - discounts);
+              (grossSales - discounts);
+            const netSales = netBeforeRefunds - refunds;
             const receipts = toPositiveInt(r.receipts ?? r.transactions, 0);
             const avgSale =
               normalizeNumber(r.averageSale ?? r.average_sale) ??

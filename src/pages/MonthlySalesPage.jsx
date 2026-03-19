@@ -169,10 +169,11 @@ function getSaleNetSales(raw, derivedSubtotal) {
     normalizeNumber(raw.netSales) ??
     normalizeNumber(raw.net_sales) ??
     null;
-  if (direct != null) return direct;
+  const refunds = getSaleRefunds(raw);
+  if (direct != null) return direct - refunds;
   const discount = getSaleDiscount(raw);
   if (derivedSubtotal == null) return null;
-  return Math.max(0, derivedSubtotal - (discount || 0));
+  return derivedSubtotal - (discount || 0) - refunds;
 }
 
 function getSaleCostOfGoods(raw, costByItemId) {
@@ -235,7 +236,7 @@ function normalizeSale(raw, costByItemId) {
   const refunds = getSaleRefunds(raw) ?? 0;
   const netSales = getSaleNetSales(raw, grossSales) ?? 0;
   const costOfGoods = getSaleCostOfGoods(raw, costByItemId) ?? 0;
-  const grossProfit = Math.max(0, netSales - costOfGoods);
+  const grossProfit = netSales - costOfGoods;
 
   return {
     dayKey,
@@ -684,4 +685,3 @@ export default function MonthlySalesPage({ apiBaseUrl, authToken, authUser }) {
     </div>
   );
 }
-

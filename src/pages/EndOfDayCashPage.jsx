@@ -155,7 +155,12 @@ function getSaleNetSales(raw, derivedSubtotal) {
     normalizeNumber(raw.netSales) ??
     normalizeNumber(raw.net_sales) ??
     null;
-  if (direct != null) return direct;
+  const refunds =
+    normalizeNumber(totals.refunds) ??
+    normalizeNumber(raw.refunds) ??
+    normalizeNumber(raw.refundTotal) ??
+    0;
+  if (direct != null) return direct - refunds;
 
   const discount =
     normalizeNumber(totals.discount) ??
@@ -164,7 +169,7 @@ function getSaleNetSales(raw, derivedSubtotal) {
     normalizeNumber(raw.discounts) ??
     null;
   if (derivedSubtotal == null) return null;
-  return Math.max(0, derivedSubtotal - (discount || 0));
+  return derivedSubtotal - (discount || 0) - refunds;
 }
 
 function getSaleDiscountAmount(raw, derivedSubtotal) {

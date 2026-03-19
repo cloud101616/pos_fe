@@ -290,10 +290,11 @@ function normalizeSale(raw, costByItemId) {
       : null);
 
   const derivedNet =
-    netSales ??
-    (derivedSubtotal != null
-      ? Math.max(0, derivedSubtotal - (discount || 0))
-      : null);
+    netSales != null
+      ? netSales - (refunds || 0)
+      : derivedSubtotal != null
+        ? derivedSubtotal - (discount || 0) - (refunds || 0)
+        : null;
 
   const costOfGoods = items.reduce((sum, it) => {
     const cost = costByItemId?.get?.(it.itemId);
@@ -301,8 +302,7 @@ function normalizeSale(raw, costByItemId) {
     return sum + unitCost * it.qty;
   }, 0);
 
-  const grossProfit =
-    derivedNet == null ? null : Math.max(0, derivedNet - costOfGoods);
+  const grossProfit = derivedNet == null ? null : derivedNet - costOfGoods;
 
   const dayKey = getLocalDayKey(createdAt);
   if (!dayKey) return null;
