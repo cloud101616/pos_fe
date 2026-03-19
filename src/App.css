@@ -700,6 +700,63 @@
   min-width: 0;
 }
 
+.createItemImageField {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.createItemImagePreview {
+  width: min(100%, 240px);
+  aspect-ratio: 1;
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.08);
+  display: grid;
+  place-items: center;
+}
+
+.createItemImagePreviewImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.createItemImagePlaceholder {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+  text-align: center;
+  padding: 16px;
+}
+
+.createItemImageControls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.createItemImageBtn {
+  position: relative;
+  overflow: hidden;
+}
+
+.createItemImageInput {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.createItemImageMeta {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .customerFormBody {
   padding: 14px 16px;
   display: flex;
@@ -934,6 +991,22 @@
 .colStock {
   text-align: right;
   min-width: 90px;
+}
+
+.lowStockEditor {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.lowStockStockInput {
+  width: 88px;
+  text-align: right;
+}
+
+.lowStockSaveBtn {
+  min-width: 64px;
 }
 
 .colEmail {
@@ -1311,77 +1384,134 @@
 }
 
 .posItemsList {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px;
+  padding: 16px;
 }
 
 .posItemRow {
   appearance: none;
-  border: 0;
-  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)),
+    rgba(15, 23, 42, 0.38);
   cursor: pointer;
   width: 100%;
   text-align: left;
-  padding: 14px 16px;
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  border-bottom: 1px solid var(--border);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  overflow: hidden;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .posItemRow:hover {
-  background: var(--hover);
+  background:
+    linear-gradient(180deg, rgba(34, 197, 94, 0.08), rgba(255, 255, 255, 0)),
+    rgba(15, 23, 42, 0.5);
+  border-color: rgba(34, 197, 94, 0.35);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.22);
 }
 
 .posItemRow:focus-visible {
   outline: 3px solid var(--focus);
-  outline-offset: -3px;
+  outline-offset: 2px;
 }
 
 .posItemThumb {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 14px;
   background: rgba(148, 163, 184, 0.18);
   border: 1px solid rgba(148, 163, 184, 0.25);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.posItemThumbImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.posItemThumbFallback {
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
 }
 
 .posItemMain {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
 .posItemName {
   font-weight: 800;
   color: var(--text);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .posItemCategory {
   font-size: 12px;
   font-weight: 650;
   color: var(--muted);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .posItemPrice {
   font-weight: 900;
   font-variant-numeric: tabular-nums;
   color: var(--text);
+  margin-top: auto;
+  font-size: 16px;
 }
 
 .posEmpty {
+  grid-column: 1 / -1;
   padding: 18px 16px;
   text-align: center;
   color: var(--muted);
   font-weight: 650;
+}
+
+@media (max-width: 720px) {
+  .posItemsList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .posItemRow {
+    padding: 8px;
+    gap: 8px;
+    border-radius: 16px;
+  }
+
+  .posItemPrice {
+    font-size: 14px;
+  }
 }
 
 .posCartOverlay {
@@ -2585,6 +2715,66 @@
   outline-offset: 2px;
 }
 
+.cashierRefundsFiltersCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cashierRefundsTopRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cashierRefundsTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cashierRefundsTabBtn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cashierRefundsTabBtn:hover {
+  background: var(--hover);
+}
+
+.cashierRefundsTabBtn:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.cashierRefundsTabBtnActive {
+  background: rgba(46, 125, 50, 0.12);
+  border-color: rgba(46, 125, 50, 0.32);
+  color: #2e7d32;
+}
+
+.cashierRefundsStoreTag {
+  margin-left: auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .receiptsColNo {
   min-width: 120px;
   font-weight: 650;
@@ -2725,4 +2915,67 @@
   color: var(--muted);
   font-weight: 650;
   font-size: 13px;
+}
+
+.cashierRefundsMetaRowBlock {
+  align-items: flex-start;
+}
+
+.cashierRefundsReasonValue {
+  max-width: 180px;
+  white-space: pre-wrap;
+}
+
+.cashierRefundsItemsBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cashierRefundsItemsList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cashierRefundsItemRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cashierRefundsItemName {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.cashierRefundsItemQty {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cashierRefundsActionBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cashierRefundsReasonInput {
+  min-height: 110px;
+}
+
+.cashierRefundsSubmitBtn {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .cashierRefundsStoreTag {
+    margin-left: 0;
+  }
 }

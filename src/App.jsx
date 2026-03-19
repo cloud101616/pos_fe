@@ -21,6 +21,7 @@ import ReceiptsReportPage from "./pages/ReceiptsReportPage.jsx";
 import EndOfDayCashPage from "./pages/EndOfDayCashPage.jsx";
 import MonthlySalesPage from "./pages/MonthlySalesPage.jsx";
 import LowStockItemsPage from "./pages/LowStockItemsPage.jsx";
+import CashierRefundsPage from "./pages/CashierRefundsPage.jsx";
 import {
   getActorHeaders,
   getAuthUserRole,
@@ -332,6 +333,7 @@ function App() {
     if (activePage === "pos" || activePage === "customers" || activePage === "logout")
       return;
     if (activePage === "cashier.mySales") return;
+    if (activePage === "cashier.refunds") return;
     if (activePage === "cashier.endOfDayCash") return;
     if (activePage === "cashier.lowStockItems") return;
     if (activePage === "items.itemList") return;
@@ -355,18 +357,17 @@ function App() {
   const sidebarItems = isCashier
     ? [
         { type: "link", id: "pos", label: "Sales", Icon: PosIcon },
-        { type: "link", id: "cashier.mySales", label: "My sales", Icon: ReportsIcon },
         {
-          type: "link",
-          id: "cashier.endOfDayCash",
-          label: "End of Day Cash",
+          type: "section",
+          id: "reports",
+          label: "Reports",
           Icon: ReportsIcon,
-        },
-        {
-          type: "link",
-          id: "cashier.lowStockItems",
-          label: "Low Stock Items",
-          Icon: ReportsIcon,
+          children: [
+            { id: "cashier.mySales", label: "My sales" },
+            { id: "cashier.refunds", label: "Refunds" },
+            { id: "cashier.endOfDayCash", label: "End of Day Cash" },
+            { id: "cashier.lowStockItems", label: "Low Stock Items" },
+          ],
         },
         { type: "link", id: "items.itemList", label: "Items", Icon: ItemsIcon },
         { type: "link", id: "customers", label: "Customers", Icon: UsersIcon },
@@ -389,6 +390,7 @@ function App() {
               label: "Sales by payment type",
             },
             { id: "reports.receipts", label: "Receipts" },
+            { id: "reports.refunds", label: "Refunds" },
             { id: "reports.lowStockItems", label: "Low Stock Items" },
             { id: "reports.endOfDayCash", label: "End of Day Cash" },
             { id: "reports.monthlySales", label: "Monthly sales" },
@@ -439,7 +441,7 @@ function App() {
             if (result.ok) {
               setExpandedSections((s) => ({
                 ...s,
-                reports: result.role === "admin",
+                reports: result.role === "admin" || result.role === "cashier",
                 items: result.role !== "cashier" && result.role !== "admin",
               }));
               if (result.role === "cashier") setIsSidebarCollapsed(true);
@@ -489,6 +491,14 @@ function App() {
           hideStoreFilter
           hideSummary
           replaceEmployeeColumnWithItems
+        />
+      );
+    if (activePage === "cashier.refunds")
+      return (
+        <CashierRefundsPage
+          apiBaseUrl={apiBaseUrl}
+          authToken={authToken}
+          authUser={authUser}
         />
       );
     if (activePage === "cashier.endOfDayCash")
@@ -666,6 +676,17 @@ function App() {
           apiBaseUrl={apiBaseUrl}
           authToken={authToken}
           authUser={authUser}
+        />
+      );
+    if (activePage === "reports.refunds")
+      return (
+        <CashierRefundsPage
+          apiBaseUrl={apiBaseUrl}
+          authToken={authToken}
+          authUser={authUser}
+          defaultTab="refunds"
+          showSalesTab={false}
+          allowRefund={false}
         />
       );
     if (activePage === "reports.lowStockItems")

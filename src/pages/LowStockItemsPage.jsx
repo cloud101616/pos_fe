@@ -7,6 +7,7 @@ import {
   getFetchCredentials,
   getReportStoreId,
   parsePagedResponse,
+  toNonNegativeInt,
   toPositiveInt,
 } from "../utils/common.js";
 import { makeStoreOptions, useStoresList } from "../utils/stores.js";
@@ -97,7 +98,11 @@ export default function LowStockItemsPage({
 
   const [items, setItems] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSavingStock, setIsSavingStock] = useState(false);
+  const [savingItemId, setSavingItemId] = useState("");
+  const [stockDrafts, setStockDrafts] = useState({});
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
   const lastFetchId = useRef(0);
 
@@ -108,12 +113,13 @@ export default function LowStockItemsPage({
   }, [authToken, authUser]);
 
   const apiRequest = useCallback(
-    async (path) => {
+    async (path, { method = "GET", body } = {}) => {
       const url = `${apiBaseUrl}${path}`;
       const response = await fetch(url, {
-        method: "GET",
+        method,
         headers: getAuthHeaders(),
         credentials: getFetchCredentials(),
+        body: body ? JSON.stringify(body) : undefined,
       });
 
       let payload = null;
@@ -194,6 +200,75 @@ export default function LowStockItemsPage({
       }
     })();
   }, [apiBaseUrl, apiRequest, storeId]);
+
+  const updateStockDraft = useCallback((itemId, value) => {
+    setStockDrafts((prev) => ({
+      ...prev,
+      [itemId]: value,
+    }));
+  }, []);
+
+  const handleSaveStock = useCallback(
+    async (item) => {
+      if (!item?.id || isSavingStock) return;
+
+      const rawValue =
+        stockDrafts[item.id] ??
+        (item.inStock == null ? "" : String(item.inStock));
+      const trimmed = String(rawValue ?? "").trim();
+      const nextStock = toNonNegativeInt(trimmed, -1);
+
+      if (trimmed === "" || nextStock < 0) {
+        setSuccess("");
+        setError("Enter a valid stock value of 0 or higher.");
+        return;
+      }
+
+      setIsSavingStock(true);
+      setSavingItemId(item.id);
+      setError("");
+      setSuccess("");
+
+      try {
+        const payload = await apiRequest(`/items/${encodeURIComponent(item.id)}/stock`, {
+          method: "PATCH",
+          body: { inStock: nextStock },
+        });
+
+        const updatedPayload =
+          (payload?.data && typeof payload.data === "object" ? payload.data : null) ??
+          (payload?.item && typeof payload.item === "object" ? payload.item : null) ??
+          (payload && typeof payload === "object" ? payload : null);
+        const normalizedUpdated = toUiItem(updatedPayload);
+        const nextItem = normalizedUpdated
+          ? {
+              ...item,
+              ...normalizedUpdated,
+              inStock:
+                normalizedUpdated.inStock == null ? nextStock : normalizedUpdated.inStock,
+              trackStock: true,
+            }
+          : {
+              ...item,
+              inStock: nextStock,
+              trackStock: true,
+            };
+
+        setItems((prev) => prev.map((current) => (current.id === item.id ? nextItem : current)));
+        setStockDrafts((prev) => ({
+          ...prev,
+          [item.id]: String(nextItem.inStock ?? nextStock),
+        }));
+        setSuccess(`Updated stock for ${item.name || item.id}.`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to update stock.");
+      } finally {
+        setIsSavingStock(false);
+        setSavingItemId("");
+      }
+    },
+    [apiRequest, isSavingStock, stockDrafts],
+  );
 
   const lowStockItems = useMemo(() => {
     const t = toPositiveInt(threshold, 10);
@@ -285,6 +360,7 @@ export default function LowStockItemsPage({
         </div>
       </div>
 
+      {success ? <div className="authSuccess">{success}</div> : null}
       {error ? <div className="authError salesSummaryError">{error}</div> : null}
 
       <div className="card salesSummaryTableCard">
@@ -315,7 +391,41 @@ export default function LowStockItemsPage({
                     <td className="colStore">
                       <span className="cellSelect">{it.storeName || it.storeId || "—"}</span>
                     </td>
-                    <td className="colStock">{it.inStock ?? "—"}</td>
+                    <td className="colStock">
+                      <div className="lowStockEditor">
+                        <input
+                          className="pageInput lowStockStockInput"
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={
+                            stockDrafts[it.id] ??
+                            (it.inStock == null ? "" : String(it.inStock))
+                          }
+                          onChange={(e) => {
+                            updateStockDraft(it.id, e.target.value);
+                            if (error) setError("");
+                            if (success) setSuccess("");
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter") return;
+                            void handleSaveStock(it);
+                          }}
+                          aria-label={`In stock for ${it.name || it.id}`}
+                          disabled={isLoading || isSavingStock}
+                        />
+                        <button
+                          className="btn btnGhost btnSmall lowStockSaveBtn"
+                          type="button"
+                          onClick={() => {
+                            void handleSaveStock(it);
+                          }}
+                          disabled={isLoading || isSavingStock}
+                        >
+                          {savingItemId === it.id ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))
               )}

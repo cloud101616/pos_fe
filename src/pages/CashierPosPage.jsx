@@ -73,7 +73,16 @@ function extractDiscountsList(payload) {
   return [];
 }
 
-function toUiItem(apiItem) {
+function resolveImageUrl(apiBaseUrl, value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw;
+  const base = String(apiBaseUrl || "").replace(/\/$/, "");
+  if (!base) return raw;
+  return raw.startsWith("/") ? `${base}${raw}` : `${base}/${raw}`;
+}
+
+function toUiItem(apiItem, apiBaseUrl = "") {
   if (!apiItem || typeof apiItem !== "object") return null;
   const id =
     apiItem.id ??
@@ -134,6 +143,10 @@ function toUiItem(apiItem) {
       typeof storeId === "string" || typeof storeId === "number"
         ? String(storeId)
         : "",
+    imageUrl: resolveImageUrl(
+      apiBaseUrl,
+      apiItem.imageUrl ?? apiItem.image_url ?? apiItem.image?.url ?? "",
+    ),
   };
 }
 
@@ -434,7 +447,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
           if (total == null && parsed.total != null) total = parsed.total;
 
           const data = extractItemsList({ ...payload, data: parsed.data });
-          const mapped = data.map(toUiItem).filter(Boolean);
+          const mapped = data.map((item) => toUiItem(item, apiBaseUrl)).filter(Boolean);
           combined.push(...mapped);
 
           if (typeof parsed.hasNext === "boolean") lastHasNext = parsed.hasNext;
@@ -463,7 +476,7 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
       } catch (e) {
         if (cancelled) return;
         const list = (Array.isArray(fallbackItems) ? fallbackItems : [])
-          .map(toUiItem)
+          .map((item) => toUiItem(item, apiBaseUrl))
           .filter(Boolean);
         setItems(list);
         setItemsTotal(list.length);
@@ -1189,7 +1202,20 @@ export default function CashierPosPage({ apiBaseUrl, authToken, authUser }) {
                 onClick={() => addToCart(item)}
                 aria-label={`Add ${item.name} to cart`}
               >
-                <span className="posItemThumb" aria-hidden="true" />
+                <span className="posItemThumb" aria-hidden="true">
+                  {item.imageUrl ? (
+                    <img
+                      className="posItemThumbImg"
+                      src={item.imageUrl}
+                      alt=""
+                      loading="lazy"
+                    />
+                  ) : (
+                    <span className="posItemThumbFallback">
+                      {String(item.name || "?").trim().charAt(0).toUpperCase() || "?"}
+                    </span>
+                  )}
+                </span>
                 <span className="posItemMain">
                   <span className="posItemName">{item.name}</span>
                   {item.category ? (

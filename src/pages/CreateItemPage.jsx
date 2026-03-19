@@ -49,6 +49,15 @@ function toUiStore(apiStore) {
   return { id: String(id), name: String(apiStore.name ?? "") };
 }
 
+function resolveImageUrl(apiBaseUrl, value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw;
+  const base = String(apiBaseUrl || "").replace(/\/$/, "");
+  if (!base) return raw;
+  return raw.startsWith("/") ? `${base}${raw}` : `${base}/${raw}`;
+}
+
 export default function CreateItemPage({
   apiBaseUrl,
   authToken,
@@ -58,6 +67,7 @@ export default function CreateItemPage({
   onSaved,
 }) {
   const didAutoSkuRef = useRef(false);
+  const imageObjectUrlRef = useRef("");
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
@@ -71,6 +81,9 @@ export default function CreateItemPage({
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
+  const [existingImageUrl, setExistingImageUrl] = useState("");
 
   // Inventory (intentionally excludes "Composite item", Variants, and POS representation sections)
   const [trackStock, setTrackStock] = useState(false);
@@ -122,8 +135,15 @@ export default function CreateItemPage({
     );
   }, [storeId, stores]);
 
-  function getAuthHeaders() {
-    const headers = { "Content-Type": "application/json" };
+  function clearImageObjectUrl() {
+    if (!imageObjectUrlRef.current) return;
+    URL.revokeObjectURL(imageObjectUrlRef.current);
+    imageObjectUrlRef.current = "";
+  }
+
+  function getAuthHeaders({ includeJsonContentType = true } = {}) {
+    const headers = {};
+    if (includeJsonContentType) headers["Content-Type"] = "application/json";
     if (authToken) headers.Authorization = `Bearer ${authToken}`;
     return { ...headers, ...getActorHeaders(authUser) };
   }
@@ -137,11 +157,12 @@ export default function CreateItemPage({
   }
 
   async function apiRequest(path, { method = "GET", body } = {}) {
+    const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
     const response = await fetch(`${apiBaseUrl}${path}`, {
       method,
       credentials: getFetchCredentials(),
-      headers: getAuthHeaders(),
-      body: body ? JSON.stringify(body) : undefined,
+      headers: getAuthHeaders({ includeJsonContentType: !isFormData }),
+      body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
     });
 
     const payload = await readJsonSafely(response);
@@ -153,6 +174,12 @@ export default function CreateItemPage({
     }
     return payload;
   }
+
+  useEffect(() => {
+    return () => {
+      clearImageObjectUrl();
+    };
+  }, []);
 
   useEffect(() => {
     writeLocalStorage(STORES_STORAGE_KEY, JSON.stringify(stores));
@@ -309,6 +336,14 @@ export default function CreateItemPage({
         setCost(data.cost == null ? "" : String(data.cost));
         setSku(String(data.sku ?? ""));
         setBarcode(String(data.barcode ?? ""));
+        const loadedImageUrl = resolveImageUrl(
+          apiBaseUrl,
+          data.imageUrl ?? data.image_url ?? data.image?.url ?? "",
+        );
+        clearImageObjectUrl();
+        setImageFile(null);
+        setExistingImageUrl(loadedImageUrl);
+        setImagePreviewUrl(loadedImageUrl);
 
         const loadedStoreIdRaw =
           data.storeId ??
@@ -365,33 +400,31 @@ export default function CreateItemPage({
         return;
       }
 
-      const payload = {
-        name: name.trim(),
-        category: categoryName
-          ? { id: categoryId || null, name: categoryName }
-          : null,
-        description: description || "",
-        isForSale: Boolean(isForSale),
-        soldBy,
-        price: toNumberOrNull(price),
-        cost: toNumberOrNull(cost),
-        sku: skuNumber ?? (skuValue || ""),
-        barcode: barcode || "",
-        trackStock: Boolean(trackStock),
-        storeId: resolvedStoreId,
-      };
-
-      if (trackStock) {
-        payload.inStock = toIntOrNull(inStock);
-      }
+      const formData = new FormData();
+      formData.set("name", name.trim());
+      formData.set(
+        "category",
+        categoryName ? JSON.stringify({ id: categoryId || null, name: categoryName }) : "",
+      );
+      formData.set("description", description || "");
+      formData.set("isForSale", String(Boolean(isForSale)));
+      formData.set("soldBy", soldBy);
+      formData.set("price", price === "" ? "" : String(toNumberOrNull(price) ?? ""));
+      formData.set("cost", cost === "" ? "" : String(toNumberOrNull(cost) ?? ""));
+      formData.set("sku", String(skuNumber ?? (skuValue || "")));
+      formData.set("barcode", barcode || "");
+      formData.set("trackStock", String(Boolean(trackStock)));
+      formData.set("storeId", resolvedStoreId);
+      formData.set("inStock", trackStock ? String(toIntOrNull(inStock) ?? "") : "");
+      if (imageFile) formData.set("image", imageFile);
 
       if (itemId) {
         await apiRequest(`/items/${encodeURIComponent(itemId)}`, {
           method: "PATCH",
-          body: payload,
+          body: formData,
         });
       } else {
-        await apiRequest("/items", { method: "POST", body: payload });
+        await apiRequest("/items", { method: "POST", body: formData });
       }
 
       onSaved?.();
@@ -488,6 +521,70 @@ export default function CreateItemPage({
                 disabled={isLoading || isSaving}
               />
             </label>
+
+            <div className="field createItemField">
+              <div className="fieldLabel">Item image</div>
+              <div className="createItemImageField">
+                <div className="createItemImagePreview">
+                  {imagePreviewUrl ? (
+                    <img
+                      className="createItemImagePreviewImg"
+                      src={imagePreviewUrl}
+                      alt={`${name.trim() || "Item"} preview`}
+                    />
+                  ) : (
+                    <span className="createItemImagePlaceholder">No image selected</span>
+                  )}
+                </div>
+
+                <div className="createItemImageControls">
+                  <label className="btn btnGhost btnSmall createItemImageBtn">
+                    <input
+                      className="createItemImageInput"
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const nextFile = e.target.files?.[0] ?? null;
+                        clearImageObjectUrl();
+                        setImageFile(nextFile);
+                        if (nextFile) {
+                          const nextUrl = URL.createObjectURL(nextFile);
+                          imageObjectUrlRef.current = nextUrl;
+                          setImagePreviewUrl(nextUrl);
+                        } else {
+                          setImagePreviewUrl(existingImageUrl);
+                        }
+                      }}
+                      disabled={isLoading || isSaving}
+                    />
+                    {imagePreviewUrl ? "Change image" : "Upload image"}
+                  </label>
+
+                  {imageFile ? (
+                    <button
+                      className="btn btnGhost btnSmall"
+                      type="button"
+                      onClick={() => {
+                        clearImageObjectUrl();
+                        setImageFile(null);
+                        setImagePreviewUrl(existingImageUrl);
+                      }}
+                      disabled={isLoading || isSaving}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+
+                  <div className="createItemImageMeta">
+                    {imageFile
+                      ? imageFile.name
+                      : existingImageUrl
+                        ? "Current image"
+                        : "JPG, PNG, or WEBP"}
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <label className="createItemCheck">
               <input
