@@ -86,6 +86,7 @@ export default function LowStockItemsPage({
 }) {
   const authRole = useMemo(() => getAuthUserRole(authUser), [authUser]);
   const canPickStore = authRole === "admin" || authRole === "owner";
+  const canEditStock = authRole !== "cashier";
   const reportStoreId = useMemo(() => getReportStoreId(authUser), [authUser]);
   const lockedStoreIdValue = useMemo(() => String(lockedStoreId || "").trim(), [lockedStoreId]);
 
@@ -211,6 +212,11 @@ export default function LowStockItemsPage({
   const handleSaveStock = useCallback(
     async (item) => {
       if (!item?.id || isSavingStock) return;
+      if (!canEditStock) {
+        setSuccess("");
+        setError("You do not have permission to edit stock.");
+        return;
+      }
 
       const rawValue =
         stockDrafts[item.id] ??
@@ -267,7 +273,7 @@ export default function LowStockItemsPage({
         setSavingItemId("");
       }
     },
-    [apiRequest, isSavingStock, stockDrafts],
+    [apiRequest, canEditStock, isSavingStock, stockDrafts],
   );
 
   const lowStockItems = useMemo(() => {
@@ -392,39 +398,43 @@ export default function LowStockItemsPage({
                       <span className="cellSelect">{it.storeName || it.storeId || "—"}</span>
                     </td>
                     <td className="colStock">
-                      <div className="lowStockEditor">
-                        <input
-                          className="pageInput lowStockStockInput"
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={
-                            stockDrafts[it.id] ??
-                            (it.inStock == null ? "" : String(it.inStock))
-                          }
-                          onChange={(e) => {
-                            updateStockDraft(it.id, e.target.value);
-                            if (error) setError("");
-                            if (success) setSuccess("");
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key !== "Enter") return;
-                            void handleSaveStock(it);
-                          }}
-                          aria-label={`In stock for ${it.name || it.id}`}
-                          disabled={isLoading || isSavingStock}
-                        />
-                        <button
-                          className="btn btnGhost btnSmall lowStockSaveBtn"
-                          type="button"
-                          onClick={() => {
-                            void handleSaveStock(it);
-                          }}
-                          disabled={isLoading || isSavingStock}
-                        >
-                          {savingItemId === it.id ? "Saving..." : "Save"}
-                        </button>
-                      </div>
+                      {canEditStock ? (
+                        <div className="lowStockEditor">
+                          <input
+                            className="pageInput lowStockStockInput"
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={
+                              stockDrafts[it.id] ??
+                              (it.inStock == null ? "" : String(it.inStock))
+                            }
+                            onChange={(e) => {
+                              updateStockDraft(it.id, e.target.value);
+                              if (error) setError("");
+                              if (success) setSuccess("");
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key !== "Enter") return;
+                              void handleSaveStock(it);
+                            }}
+                            aria-label={`In stock for ${it.name || it.id}`}
+                            disabled={isLoading || isSavingStock}
+                          />
+                          <button
+                            className="btn btnGhost btnSmall lowStockSaveBtn"
+                            type="button"
+                            onClick={() => {
+                              void handleSaveStock(it);
+                            }}
+                            disabled={isLoading || isSavingStock}
+                          >
+                            {savingItemId === it.id ? "Saving..." : "Save"}
+                          </button>
+                        </div>
+                      ) : (
+                        <span>{it.inStock ?? "--"}</span>
+                      )}
                     </td>
                   </tr>
                 ))
