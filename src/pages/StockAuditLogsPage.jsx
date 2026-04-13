@@ -305,6 +305,8 @@ function normalizeAuditEntry(raw) {
       "changes.inStock.from",
       "changes.stock.before",
       "changes.stock.from",
+      "body.beforeStock",
+      "body.before_stock",
     ]),
   );
 
@@ -322,8 +324,10 @@ function normalizeAuditEntry(raw) {
       "changes.inStock.to",
       "changes.stock.after",
       "changes.stock.to",
-      "item.inStock",
-      "item.stock",
+      "body.afterStock",
+      "body.after_stock",
+      "body.inStock",
+      "body.stock",
     ]),
   );
 
@@ -341,6 +345,8 @@ function normalizeAuditEntry(raw) {
       "changes.trackStock.from",
       "changes.track_stock.before",
       "changes.track_stock.from",
+      "body.beforeTrackStock",
+      "body.before_track_stock",
     ]),
   );
 
@@ -358,8 +364,10 @@ function normalizeAuditEntry(raw) {
       "changes.trackStock.to",
       "changes.track_stock.after",
       "changes.track_stock.to",
-      "item.trackStock",
-      "item.track_stock",
+      "body.afterTrackStock",
+      "body.after_track_stock",
+      "body.trackStock",
+      "body.track_stock",
     ]),
   );
 
@@ -804,7 +812,7 @@ export default function StockAuditLogsPage({ apiBaseUrl, authToken, authUser }) 
                         <td className="colName">{row.itemName || row.itemId || row.id}</td>
                         <td className="receiptsColEmployee">{row.userName || "--"}</td>
                         <td className="receiptsColType">{row.actionLabel}</td>
-                        <td className="colStock">{row.stockSummary}</td>
+                        <td className="colStock">{formatStockValue(row.nextStock)}</td>
                         <td className="receiptsColDate">{formatAuditDate(row.date)}</td>
                       </tr>
                     ))
