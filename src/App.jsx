@@ -20,6 +20,7 @@ import SalesByPaymentTypePage from "./pages/SalesByPaymentTypePage.jsx";
 import ReceiptsReportPage from "./pages/ReceiptsReportPage.jsx";
 import TransactionsReportPage from "./pages/TransactionsReportPage.jsx";
 import StockAuditLogsPage from "./pages/StockAuditLogsPage.jsx";
+import DeletedItemsReportPage from "./pages/DeletedItemsReportPage.jsx";
 import EndOfDayCashPage from "./pages/EndOfDayCashPage.jsx";
 import MonthlySalesPage from "./pages/MonthlySalesPage.jsx";
 import LowStockItemsPage from "./pages/LowStockItemsPage.jsx";
@@ -396,6 +397,7 @@ function App() {
             { id: "reports.refunds", label: "Refunds" },
             { id: "reports.lowStockItems", label: "Low Stock Items" },
             { id: "reports.stockAudit", label: "Stock audit" },
+            { id: "reports.deletedItems", label: "Deleted items" },
             { id: "reports.endOfDayCash", label: "End of Day Cash" },
             { id: "reports.monthlySales", label: "Monthly sales" },
             // { id: "reports.salesByModifier", label: "Sales by modifier" },
@@ -713,6 +715,14 @@ function App() {
     if (activePage === "reports.stockAudit")
       return (
         <StockAuditLogsPage
+          apiBaseUrl={apiBaseUrl}
+          authToken={authToken}
+          authUser={authUser}
+        />
+      );
+    if (activePage === "reports.deletedItems")
+      return (
+        <DeletedItemsReportPage
           apiBaseUrl={apiBaseUrl}
           authToken={authToken}
           authUser={authUser}
