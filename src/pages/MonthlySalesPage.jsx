@@ -17,6 +17,15 @@ const moneyFormatter = new Intl.NumberFormat("en-PH", {
   maximumFractionDigits: 2,
 });
 
+const EMPTY_TOTALS = Object.freeze({
+  grossSales: 0,
+  refunds: 0,
+  discounts: 0,
+  netSales: 0,
+  costOfGoods: 0,
+  grossProfit: 0,
+});
+
 function formatMoney(value) {
   const numberValue = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(numberValue)) return "--";
@@ -58,13 +67,6 @@ function normalizeNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-function toPositiveInt(value, fallback) {
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  const i = Math.floor(n);
-  return i > 0 ? i : fallback;
-}
-
 function extractSalesList(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.data)) return payload.data;
@@ -73,244 +75,6 @@ function extractSalesList(payload) {
   if (Array.isArray(payload?.data?.items)) return payload.data.items;
   if (Array.isArray(payload?.data?.results)) return payload.data.results;
   return [];
-}
-
-function sumDiscountAmounts(discounts) {
-  if (!Array.isArray(discounts)) return null;
-  let sum = 0;
-  let hasAny = false;
-  for (const d of discounts) {
-    if (!d || typeof d !== "object") continue;
-    const amount =
-      normalizeNumber(d.amount) ??
-      normalizeNumber(d.discountAmount) ??
-      normalizeNumber(d.discount_amount) ??
-      null;
-    if (!Number.isFinite(amount)) continue;
-    sum += amount;
-    hasAny = true;
-  }
-  return hasAny ? sum : 0;
-}
-
-function getLocalDayKey(value) {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return formatIsoDateInput(date);
-}
-
-function normalizeSaleType(raw, fallbackType = "sale") {
-  if (!raw || typeof raw !== "object") return fallbackType;
-  const value =
-    raw.transactionType ??
-    raw.transaction_type ??
-    raw.type ??
-    raw.saleType ??
-    raw.sale_type ??
-    raw.kind ??
-    raw.recordType ??
-    raw.record_type ??
-    "";
-  const lowered = String(value || "").trim().toLowerCase();
-  if (lowered.includes("refund")) return "refund";
-  if (lowered.includes("sale")) return "sale";
-  return fallbackType;
-}
-
-function getSaleGrossSales(raw) {
-  if (!raw || typeof raw !== "object") return null;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  const fromTotals =
-    normalizeNumber(totals.subtotal) ??
-    normalizeNumber(totals.gross) ??
-    normalizeNumber(totals.totalBeforeDiscount) ??
-    normalizeNumber(totals.total_before_discount) ??
-    null;
-  const fromRaw =
-    normalizeNumber(raw.subtotal) ??
-    normalizeNumber(raw.gross) ??
-    normalizeNumber(raw.totalBeforeDiscount) ??
-    normalizeNumber(raw.total_before_discount) ??
-    null;
-
-  const direct = fromTotals ?? fromRaw;
-  if (direct != null) return direct;
-
-  const rawItems = Array.isArray(raw.items) ? raw.items : [];
-  if (rawItems.length === 0) return null;
-
-  const derived = rawItems.reduce((sum, it) => {
-    if (!it || typeof it !== "object") return sum;
-    const qty = toPositiveInt(it.qty ?? it.quantity, 0);
-    const unitPrice = normalizeNumber(it.unitPrice ?? it.unit_price ?? it.price) ?? 0;
-    if (qty <= 0) return sum;
-    return sum + unitPrice * qty;
-  }, 0);
-  return derived;
-}
-
-function getSaleDirectNet(raw) {
-  if (!raw || typeof raw !== "object") return null;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  return (
-    normalizeNumber(totals.amountDue) ??
-    normalizeNumber(totals.total) ??
-    normalizeNumber(totals.netSales) ??
-    normalizeNumber(totals.net_sales) ??
-    normalizeNumber(raw.amountDue) ??
-    normalizeNumber(raw.total) ??
-    normalizeNumber(raw.netSales) ??
-    normalizeNumber(raw.net_sales) ??
-    normalizeNumber(raw.amount) ??
-    normalizeNumber(raw.grandTotal) ??
-    normalizeNumber(raw.grand_total) ??
-    null
-  );
-}
-
-function getSaleDiscount(raw) {
-  if (!raw || typeof raw !== "object") return 0;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  let discount =
-    normalizeNumber(totals.discount) ??
-    normalizeNumber(totals.discounts) ??
-    normalizeNumber(raw.discount) ??
-    null;
-  if (discount == null) {
-    const fromArray = sumDiscountAmounts(raw.discounts);
-    if (fromArray != null) discount = fromArray;
-  }
-  if (discount == null) discount = 0;
-  return discount;
-}
-
-function getSaleRefunds(raw, saleType = normalizeSaleType(raw)) {
-  if (!raw || typeof raw !== "object") return 0;
-  const totals = raw.totals && typeof raw.totals === "object" ? raw.totals : {};
-  const direct =
-    normalizeNumber(totals.refunds) ??
-    normalizeNumber(totals.refundAmount) ??
-    normalizeNumber(totals.refund_amount) ??
-    normalizeNumber(raw.refunds) ??
-    normalizeNumber(raw.refundAmount) ??
-    normalizeNumber(raw.refund_amount) ??
-    normalizeNumber(raw.refundTotal) ??
-    normalizeNumber(raw.refund_total) ??
-    null;
-  if (direct != null) return Math.abs(direct);
-  if (saleType !== "refund") return 0;
-  const fallback = getSaleDirectNet(raw);
-  return fallback == null ? 0 : Math.abs(fallback);
-}
-
-function getSaleNetSales(raw, derivedSubtotal, saleType = normalizeSaleType(raw), refunds = getSaleRefunds(raw, saleType)) {
-  if (!raw || typeof raw !== "object") return null;
-  const direct = getSaleDirectNet(raw);
-  if (saleType === "refund") return -Math.abs(refunds || direct || derivedSubtotal || 0);
-  if (direct != null) return direct - refunds;
-  const discount = getSaleDiscount(raw);
-  if (derivedSubtotal == null) return null;
-  return derivedSubtotal - (discount || 0) - refunds;
-}
-
-function getSaleCostOfGoods(raw, costByItemId) {
-  if (!raw || typeof raw !== "object") return 0;
-  const rawItems = Array.isArray(raw.items) ? raw.items : [];
-  if (rawItems.length === 0) return 0;
-  return rawItems.reduce((sum, it) => {
-    if (!it || typeof it !== "object") return sum;
-    const itemId = it.itemId ?? it.item_id ?? it.id ?? it._id ?? null;
-    const qty = toPositiveInt(it.qty ?? it.quantity, 0);
-    if (!itemId || qty <= 0) return sum;
-    const directCost =
-      normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost ?? it.costPrice ?? it.cost_price) ??
-      null;
-    const lookupCost =
-      directCost != null
-        ? directCost
-        : normalizeNumber(costByItemId?.get?.(String(itemId))) ?? 0;
-    return sum + lookupCost * qty;
-  }, 0);
-}
-
-function getSaleCashierId(raw) {
-  if (!raw || typeof raw !== "object") return "";
-  const id =
-    raw.cashierId ??
-    raw.cashier_id ??
-    raw.employeeId ??
-    raw.employee_id ??
-    raw.userId ??
-    raw.user_id ??
-    raw.cashier?.id ??
-    raw.cashier?._id ??
-    null;
-  return id == null ? "" : String(id);
-}
-
-function getSaleCashierName(raw) {
-  if (!raw || typeof raw !== "object") return "";
-  const name =
-    raw.cashierName ??
-    raw.cashier_name ??
-    raw.employeeName ??
-    raw.employee_name ??
-    raw.cashier?.name ??
-    raw.cashier?.fullName ??
-    raw.user?.name ??
-    "";
-  return String(name || "");
-}
-
-function normalizeSale(raw, costByItemId) {
-  if (!raw || typeof raw !== "object") return null;
-  const createdAt = raw.createdAt ?? raw.created_at ?? raw.date ?? raw.datetime ?? null;
-  const dayKey = getLocalDayKey(createdAt);
-  if (!dayKey) return null;
-
-  const saleType = normalizeSaleType(raw);
-  const grossSales = saleType === "refund" ? 0 : (getSaleGrossSales(raw) ?? 0);
-  const discounts = saleType === "refund" ? 0 : (getSaleDiscount(raw) ?? 0);
-  const refunds = getSaleRefunds(raw, saleType) ?? 0;
-  const netSales = getSaleNetSales(raw, grossSales, saleType, refunds) ?? 0;
-  const costOfGoods = saleType === "refund" ? 0 : (getSaleCostOfGoods(raw, costByItemId) ?? 0);
-  const grossProfit = netSales - costOfGoods;
-
-  return {
-    dayKey,
-    cashierId: getSaleCashierId(raw),
-    cashierName: getSaleCashierName(raw),
-    grossSales,
-    refunds,
-    discounts,
-    netSales,
-    costOfGoods,
-    grossProfit,
-  };
-}
-
-function aggregateByDay(sales) {
-  const byDay = new Map();
-  for (const sale of sales) {
-    const key = sale.dayKey;
-    const current = byDay.get(key) || {
-      dayKey: key,
-      grossSales: 0,
-      refunds: 0,
-      discounts: 0,
-      netSales: 0,
-      costOfGoods: 0,
-      grossProfit: 0,
-    };
-    current.grossSales += sale.grossSales || 0;
-    current.refunds += sale.refunds || 0;
-    current.discounts += sale.discounts || 0;
-    current.netSales += sale.netSales || 0;
-    current.costOfGoods += sale.costOfGoods || 0;
-    current.grossProfit += sale.grossProfit || 0;
-    byDay.set(key, current);
-  }
-  return byDay;
 }
 
 function sumTotals(list) {
@@ -333,6 +97,119 @@ function sumTotals(list) {
       grossProfit: 0,
     },
   );
+}
+
+function roundMoney(value) {
+  return Math.round((normalizeNumber(value) ?? 0) * 100) / 100;
+}
+
+function readMetric(source, keys) {
+  for (const key of keys) {
+    const value = normalizeNumber(source?.[key]);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function normalizeMonthlyTotals(source) {
+  const root = source && typeof source === "object" ? source : {};
+  const grossSales =
+    readMetric(root, ["grossSales", "gross_sales", "gross", "subtotal"]) ?? 0;
+  const refunds =
+    readMetric(root, ["refunds", "refundAmount", "refund_amount", "refundTotal", "refund_total"]) ??
+    0;
+  const discounts =
+    readMetric(root, ["discounts", "discount", "discountAmount", "discount_amount"]) ?? 0;
+  const netSales =
+    readMetric(root, ["netSales", "net_sales", "net", "total", "amountDue", "amount_due"]) ?? 0;
+  const costOfGoods =
+    readMetric(root, ["costOfGoods", "cost_of_goods", "cogs", "cost"]) ?? 0;
+  const grossProfit =
+    readMetric(root, ["grossProfit", "gross_profit", "profit"]) ?? (netSales - costOfGoods);
+
+  return {
+    grossSales: roundMoney(grossSales),
+    refunds: roundMoney(refunds),
+    discounts: roundMoney(discounts),
+    netSales: roundMoney(netSales),
+    costOfGoods: roundMoney(costOfGoods),
+    grossProfit: roundMoney(grossProfit),
+  };
+}
+
+function normalizeDayKey(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+  return formatIsoDateInput(date);
+}
+
+function normalizeMonthlyRow(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const dayKey = normalizeDayKey(raw.dayKey ?? raw.day_key ?? raw.date ?? raw.day ?? raw.bucket ?? raw.key);
+  if (!dayKey) return null;
+  const merged = {
+    ...(raw && typeof raw === "object" ? raw : {}),
+    ...(raw.totals && typeof raw.totals === "object" ? raw.totals : {}),
+  };
+  return { dayKey, ...normalizeMonthlyTotals(merged) };
+}
+
+function normalizeMonthlyReport(payload, fallback = {}) {
+  const source =
+    payload?.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+      ? payload.data
+      : payload;
+  const root = source && typeof source === "object" ? source : {};
+  const rows = extractSalesList(root.data ?? root.rows ?? root.series ?? root.results)
+    .map(normalizeMonthlyRow)
+    .filter(Boolean)
+    .sort((a, b) => a.dayKey.localeCompare(b.dayKey));
+
+  const summarySource =
+    root.summary && typeof root.summary === "object" ? root.summary : sumTotals(rows);
+
+  return {
+    month: String(root.month ?? fallback.month ?? ""),
+    from: String(root.from ?? fallback.from ?? ""),
+    to: String(root.to ?? fallback.to ?? ""),
+    currency: String(root.currency ?? fallback.currency ?? "PHP"),
+    summary: normalizeMonthlyTotals(summarySource),
+    rows,
+  };
+}
+
+function extractEmployeeOptions(payload) {
+  const parsed = payload ? parsePagedResponse(payload, { page: 1, limit: 1000 }) : { data: [] };
+  return extractSalesList(parsed.data)
+    .map((row) => {
+      if (!row || typeof row !== "object") return null;
+      const id =
+        row.employeeId ??
+        row.employee_id ??
+        row.cashierId ??
+        row.cashier_id ??
+        row.userId ??
+        row.user_id ??
+        row.id ??
+        null;
+      if (!id) return null;
+      const label =
+        String(
+          row.name ??
+            row.employeeName ??
+            row.employee_name ??
+            row.cashierName ??
+            row.cashier_name ??
+            row.label ??
+            "",
+        ).trim() || String(id);
+      return { id: String(id), label };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
 }
 
 function toCsv(rows) {
@@ -367,7 +244,14 @@ export default function MonthlySalesPage({ apiBaseUrl, authToken, authUser }) {
   const [employeeId, setEmployeeId] = useState("all");
   const [employees, setEmployees] = useState([]);
 
-  const [monthSales, setMonthSales] = useState([]);
+  const [report, setReport] = useState(() => ({
+    month: todayMonthKey,
+    from: "",
+    to: "",
+    currency: "PHP",
+    summary: EMPTY_TOTALS,
+    rows: [],
+  }));
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -420,25 +304,16 @@ export default function MonthlySalesPage({ apiBaseUrl, authToken, authUser }) {
     return storeOptions.filter((s) => String(s.id) === active);
   }, [canPickStore, storeId, storeOptions]);
 
-  const fetchAllPages = useCallback(
-    async (basePath, { maxPages = 12 } = {}) => {
-      const results = [];
-      let currentPage = 1;
-      while (currentPage <= maxPages) {
-        const path = basePath.includes("?")
-          ? `${basePath}&page=${currentPage}`
-          : `${basePath}?page=${currentPage}`;
-        const payload = await apiRequest(path);
-        const parsed = parsePagedResponse(payload, { page: currentPage, limit: 1000 });
-        const pageData = Array.isArray(parsed.data) ? parsed.data : [];
-        results.push(...pageData);
-        if (!parsed.hasNext || pageData.length === 0) break;
-        currentPage += 1;
-      }
-      return results;
-    },
-    [apiRequest],
-  );
+  useEffect(() => {
+    if (!canPickStore) {
+      setStoreId(reportStoreId);
+      return;
+    }
+    if (authRole !== "admin" && reportStoreId && !storeId) {
+      setStoreId(reportStoreId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authRole, canPickStore, reportStoreId]);
 
   useEffect(() => {
     if (!apiBaseUrl) return;
@@ -454,83 +329,76 @@ export default function MonthlySalesPage({ apiBaseUrl, authToken, authUser }) {
       try {
         const startKey = formatIsoDateInput(bounds.start);
         const endKey = formatIsoDateInput(new Date(bounds.endExclusive.getTime() - 1));
-        const query = buildQueryString({
+        const reportQuery = buildQueryString({
+          month: monthKey,
+          storeId: storeId || undefined,
+          allStores: canPickStore && !storeId ? true : undefined,
+          ...(employeeId !== "all"
+            ? {
+                employeeId,
+                cashierId: employeeId,
+              }
+            : null),
+        });
+        const employeesQuery = buildQueryString({
           startDate: startKey,
           endDate: endKey,
           from: startKey,
           to: endKey,
           storeId: storeId || undefined,
+          allStores: canPickStore && !storeId ? true : undefined,
           page: 1,
-          limit: 500,
+          limit: 1000,
         });
 
-        const itemsQuery = buildQueryString({
-          limit: 2000,
-          page: 1,
-          storeId: storeId || undefined,
-        });
-
-        const [rawSales, rawItems] = await Promise.all([
-          fetchAllPages(`/sales${query}`, { maxPages: 12 }),
-          apiRequest(`/items${itemsQuery}`).catch(() => null),
+        const [reportPayload, employeePayload] = await Promise.all([
+          apiRequest(`/sales/reports/monthly-sales${reportQuery}`),
+          apiRequest(`/sales/reports/by-employee${employeesQuery}`).catch(() => null),
         ]);
 
-        const itemsList = rawItems ? extractSalesList(rawItems) : [];
-        const costByItemId = new Map();
-        for (const it of itemsList) {
-          if (!it || typeof it !== "object") continue;
-          const id = it.id ?? it._id ?? it.itemId ?? it.uuid ?? null;
-          if (!id) continue;
-          const cost = normalizeNumber(it.cost ?? it.unitCost ?? it.unit_cost);
-          if (Number.isFinite(cost)) costByItemId.set(String(id), cost);
-        }
-
-        const normalized = extractSalesList(rawSales)
-          .map((s) => normalizeSale(s, costByItemId))
-          .filter(Boolean)
-          .filter((s) => s.dayKey >= startKey && s.dayKey <= endKey);
-
-        const employeeMap = new Map();
-        for (const s of normalized) {
-          if (!s.cashierId || s.cashierId === "null") continue;
-          const label = s.cashierName?.trim() ? s.cashierName.trim() : s.cashierId;
-          employeeMap.set(s.cashierId, label);
-        }
-        const employeeOptions = [...employeeMap.entries()]
-          .map(([id, label]) => ({ id, label }))
-          .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+        const nextReport = normalizeMonthlyReport(reportPayload, {
+          month: monthKey,
+          from: startKey,
+          to: endKey,
+        });
+        const employeeOptions = extractEmployeeOptions(employeePayload);
 
         if (fetchId !== lastFetchId.current) return;
-        setMonthSales(normalized);
+        setReport(nextReport);
         setEmployees(employeeOptions);
       } catch (e) {
         if (fetchId !== lastFetchId.current) return;
         setError(e instanceof Error ? e.message : "Failed to load monthly sales.");
-        setMonthSales([]);
+        setReport({
+          month: monthKey,
+          from: "",
+          to: "",
+          currency: "PHP",
+          summary: EMPTY_TOTALS,
+          rows: [],
+        });
         setEmployees([]);
       } finally {
         if (fetchId === lastFetchId.current) setIsLoading(false);
       }
     })();
-  }, [apiBaseUrl, apiRequest, fetchAllPages, monthKey, storeId]);
+  }, [apiBaseUrl, apiRequest, canPickStore, employeeId, monthKey, storeId]);
+
+  useEffect(() => {
+    if (employeeId === "all") return;
+    if (employees.length === 0) return;
+    if (employees.some((employee) => employee.id === employeeId)) return;
+    setEmployeeId("all");
+  }, [employeeId, employees]);
 
   const tableRows = useMemo(() => {
-    const filtered = employeeId === "all" ? monthSales : monthSales.filter((s) => s.cashierId === employeeId);
-    const byDay = aggregateByDay(filtered);
-    return [...byDay.values()].sort((a, b) => a.dayKey.localeCompare(b.dayKey));
-  }, [employeeId, monthSales]);
+    return Array.isArray(report.rows) ? report.rows : [];
+  }, [report.rows]);
 
   const totals = useMemo(() => {
-    const sum = sumTotals(tableRows);
-    return {
-      grossSales: Math.round(sum.grossSales * 100) / 100,
-      refunds: Math.round(sum.refunds * 100) / 100,
-      discounts: Math.round(sum.discounts * 100) / 100,
-      netSales: Math.round(sum.netSales * 100) / 100,
-      costOfGoods: Math.round(sum.costOfGoods * 100) / 100,
-      grossProfit: Math.round(sum.grossProfit * 100) / 100,
-    };
-  }, [tableRows]);
+    const summary = report.summary && typeof report.summary === "object" ? report.summary : null;
+    return normalizeMonthlyTotals(summary ?? sumTotals(tableRows));
+  }, [report.summary, tableRows]);
 
   const monthLabel = useMemo(() => {
     const bounds = getLocalMonthBounds(monthKey);
