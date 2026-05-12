@@ -29,11 +29,8 @@
 
 .toastWarning {
   border-color: rgba(245, 158, 11, 0.4);
-  background: linear-gradient(
-      0deg,
-      rgba(245, 158, 11, 0.08),
-      rgba(245, 158, 11, 0.08)
-    ),
+  background:
+    linear-gradient(0deg, rgba(245, 158, 11, 0.08), rgba(245, 158, 11, 0.08)),
     var(--surface);
 }
 
@@ -483,7 +480,7 @@
 }
 
 .switchTrack::after {
-  content: '';
+  content: "";
   position: absolute;
   top: 3px;
   left: 3px;
@@ -1024,7 +1021,8 @@
 .colPin {
   min-width: 130px;
   font-variant-numeric: tabular-nums;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
   letter-spacing: 0.12em;
 }
@@ -1460,9 +1458,10 @@
 }
 
 .posItemName {
+  font-size: 10px;
   font-weight: 800;
   color: var(--text);
-  line-height: 1.25;
+  line-height: 1.18;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
